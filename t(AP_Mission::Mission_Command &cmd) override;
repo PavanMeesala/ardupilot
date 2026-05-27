@@ -1,0 +1,18 @@
+ArduCopter/GCS_MAVLink_Copter.cpp[36m:[mbool GCS_MAVLINK_Copter::[1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd)
+ArduCopter/GCS_MAVLink_Copter.h[36m:[m    bool [1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd) override;
+ArduPlane/GCS_MAVLink_Plane.cpp[36m:[mbool GCS_MAVLINK_Plane::[1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd)
+ArduPlane/GCS_MAVLink_Plane.cpp[36m:[m    return plane.control_mode->[1;31mhandle_guided_request[m(cmd.content.location);
+ArduPlane/GCS_MAVLink_Plane.h[36m:[m    bool [1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd) override;
+ArduPlane/mode.h[36m:[m    virtual bool [1;31mhandle_guided_request[m(Location target_loc) { return false; }
+ArduPlane/mode.h[36m:[m    bool [1;31mhandle_guided_request[m(Location target_loc) override;
+ArduPlane/mode.h[36m:[m    bool [1;31mhandle_guided_request[m(Location target_loc) override;
+ArduPlane/mode_LoiterAltQLand.cpp[36m:[m    [1;31mhandle_guided_request[m(loiter_wp);
+ArduPlane/mode_LoiterAltQLand.cpp[36m:[mbool ModeLoiterAltQLand::[1;31mhandle_guided_request[m(Location target_loc)
+ArduPlane/mode_guided.cpp[36m:[mbool ModeGuided::[1;31mhandle_guided_request[m(Location target_loc)
+ArduSub/GCS_MAVLink_Sub.cpp[36m:[mbool GCS_MAVLINK_Sub::[1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd)
+ArduSub/GCS_MAVLink_Sub.h[36m:[m    bool [1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd) override;
+Rover/GCS_MAVLink_Rover.cpp[36m:[mbool GCS_MAVLINK_Rover::[1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd)
+Rover/GCS_MAVLink_Rover.h[36m:[m    bool [1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd) override;
+Tools/AP_Periph/GCS_MAVLink.h[36m:[m    bool [1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd) override { return true; }
+libraries/GCS_MAVLink/GCS.h[36m:[m    virtual bool [1;31mhandle_guided_request[m(AP_Mission::Mission_Command &cmd) { return false; };
+libraries/GCS_MAVLink/GCS_Common.cpp[36m:[m            result = ([1;31mhandle_guided_request[m(cmd) ? MAV_MISSION_ACCEPTED

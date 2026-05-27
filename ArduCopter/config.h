@@ -45,6 +45,7 @@
     # define ARMING_DELAY_SEC 2.0f
 #endif
 
+
 //////////////////////////////////////////////////////////////////////////////
 // FRAME_CONFIG
 //
@@ -173,6 +174,18 @@
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
+// Custom Parameter - Detection threshold for Dynamic Land Mode
+#ifndef DETECTION_THRESHOLD_DEFAULT
+ # define DETECTION_THRESHOLD_DEFAULT      0.3     // default value for detection threshold
+#endif
+
+//////////////////////////////////////////////////////////////////////////////
+// Rescue mode - control vehicle's position or angles from GCS
+#ifndef MODE_RESCUE_ENABLED
+# define MODE_RESCUE_ENABLED 1
+#endif
+
+//////////////////////////////////////////////////////////////////////////////
 // Guided mode - control vehicle's position or angles from GCS
 #ifndef MODE_GUIDED_ENABLED
 # define MODE_GUIDED_ENABLED 1
@@ -297,6 +310,10 @@
 #endif
 #ifndef FLIGHT_MODE_6
  # define FLIGHT_MODE_6                  Mode::Number::STABILIZE
+#endif
+
+#ifndef FLIGHT_MODE_7
+ # define FLIGHT_MODE_7                  Mode::Number::STABILIZE
 #endif
 
 

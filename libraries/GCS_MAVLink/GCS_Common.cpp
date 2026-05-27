@@ -994,8 +994,9 @@ void GCS_MAVLINK::handle_mission_item(const mavlink_message_t &msg)
         if (current == 2) {
             // current = 2 is a flag to tell us this is a "guided mode"
             // waypoint and not for the mission
-            result = (handle_guided_request(cmd) ? MAV_MISSION_ACCEPTED
-                      : MAV_MISSION_ERROR) ;
+            result =  (handle_rescue_request(cmd) ? MAV_MISSION_ACCEPTED
+                      : handle_guided_request(cmd) ? MAV_MISSION_ACCEPTED 
+                      : MAV_MISSION_ERROR); 
         } else if (current == 3) {
             //current = 3 is a flag to tell us this is a alt change only
             // add home alt if needed

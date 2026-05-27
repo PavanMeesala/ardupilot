@@ -232,6 +232,10 @@ public:
         k_param_rtl_speed_cms = 135,
         k_param_fs_batt_curr_rtl,
         k_param_rtl_cone_slope, // 137
+        //*********************************************** */
+        // custom parameter for detection threshold
+        k_param_detection_threshold, // 138
+        //************************************************  */
 
         //
         // 140: Sensor parameters
@@ -323,6 +327,7 @@ public:
         k_param_simple_modes,
         k_param_flight_mode_chan,
         k_param_initial_mode,
+        k_param_flight_mode7,  // Custom Mode
 
         //
         // 210: Waypoint data
@@ -412,6 +417,7 @@ public:
 
     AP_Int8         wp_yaw_behavior;            // controls how the autopilot controls yaw during missions
 
+    AP_Float        detection_threshold;          // custom parameter for detection threshold
 #if MODE_POSHOLD_ENABLED
     AP_Int16        poshold_brake_rate_degs;    // PosHold flight mode's rotation rate during braking in deg/sec
     AP_Int16        poshold_brake_angle_max;    // PosHold flight mode's max lean angle during braking in centi-degrees
@@ -441,6 +447,7 @@ public:
     AP_Int8         simple_modes;
     AP_Int8         flight_mode_chan;
     AP_Int8         initial_mode;
+    AP_Int8         flight_mode7;  // Custom Mode
 
     // Misc
     //
@@ -664,6 +671,11 @@ public:
 
 #if MODE_GUIDED_ENABLED
     AP_Float guided_timeout;
+#endif
+
+#if MODE_RESCUE_ENABLED
+    AP_Int32 rescue_options;
+    AP_Float rescue_timeout;
 #endif
 
     AP_Int8                 surftrak_mode;

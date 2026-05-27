@@ -227,6 +227,7 @@ public:
     friend class ModeZigZag;
     friend class ModeAutorotate;
     friend class ModeTurtle;
+    friend class ModeRescue;
 
     friend class _AutoTakeoff;
 
@@ -258,9 +259,9 @@ private:
     RC_Channel *rc_tuning2;
 #endif  // AP_RC_TRANSMITTER_TUNING_ENABLED
 
-    // flight modes convenience array
+    // flight modes convenience array        k_param_flight_mode7,  // Custom Mode
     AP_Int8 *flight_modes;
-    const uint8_t num_flight_modes = 6;
+    const uint8_t num_flight_modes = 7;
 
     AP_SurfaceDistance rangefinder_state {ROTATION_PITCH_270, 0U};
     AP_SurfaceDistance rangefinder_up_state {ROTATION_PITCH_90, 1U};
@@ -1101,6 +1102,9 @@ private:
 #endif
 #if MODE_TURTLE_ENABLED
     ModeTurtle mode_turtle;
+#endif
+#if MODE_RESCUE_ENABLED
+    ModeRescue mode_rescue;
 #endif
 
     // mode.cpp

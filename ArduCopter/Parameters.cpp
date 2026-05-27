@@ -31,6 +31,7 @@
 #endif
 
 const AP_Param::Info Copter::var_info[] = {
+
     // @Param: FORMAT_VERSION
     // @DisplayName: Eeprom format version number
     // @Description: This value is incremented when changes are made to the eeprom format
@@ -284,6 +285,22 @@ const AP_Param::Info Copter::var_info[] = {
     // @Bitmask: 0:SwitchPos1, 1:SwitchPos2, 2:SwitchPos3, 3:SwitchPos4, 4:SwitchPos5, 5:SwitchPos6
     // @User: Advanced
     GSCALAR(simple_modes, "SIMPLE",                 0),
+
+    //***************************** 
+    // custom flight mode
+    // ****************************/
+    // @Param: FLTMODE7
+    // @DisplayName: Flight Mode 7 (Custom Mode)
+    // @Description: Flight mode when pwm of Flightmode channel(FLTMODE_CH) is >=1880
+    // @User: Advanced
+ 
+    GSCALAR(flight_mode7, "FLTMODE7", (uint8_t)FLIGHT_MODE_7),
+
+    // @Param: DETECT_THRESHOLD
+    // @DisplayName: Detection Threshold
+    // @Description: Custom parameter for detection threshold
+    // @User: Advanced
+    GSCALAR(detection_threshold, "DETECT_THRESH", DETECTION_THRESHOLD_DEFAULT), // stored as int but displayed as float
 
     // @Param: LOG_BITMASK
     // @DisplayName: Log bitmask
@@ -988,7 +1005,6 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     AP_GROUPINFO("GUID_TIMEOUT", 46, ParametersG2, guided_timeout, 3.0),
 #endif
 
-    // ACRO_PR_RATE (47), ACRO_Y_RATE (48), PILOT_Y_RATE (49) and PILOT_Y_EXPO (50) moved to command model class
 
 #if AP_RANGEFINDER_ENABLED
     // @Param: SURFTRAK_MODE
@@ -1227,6 +1243,22 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Description: Selects parameter (normally a PID gain) that is being tuned with an RC transmitter's knob. The RC input channel used is assigned by setting RCx_OPTION to 220.
     AP_GROUPINFO("TUNE2", 13, ParametersG2, rc_tuning2_param, 0),
 #endif  // AP_RC_TRANSMITTER_TUNING_ENABLED
+#if MODE_RESCUE_ENABLED
+    // @Param: RESC_OPTIONS
+    // @DisplayName: Rescue mode options
+    // @Description: Options that can be applied to change Rescue mode behaviour
+    // @Bitmask: 2:Ignore pilot yaw
+    // @User: Advanced
+    AP_GROUPINFO("RESC_OPTIONS", 14, ParametersG2, rescue_options, 0),
+
+    // @Param: RESC_TIMEOUT
+    // @DisplayName: Rescue mode timeout
+    // @Description: Rescue mode timeout in seconds
+    // @Units: s
+    // @Range: 0.1 5
+    // @User: Advanced
+    AP_GROUPINFO("RESC_TIMEOUT", 15, ParametersG2, rescue_timeout, 3.0),
+#endif
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION
 

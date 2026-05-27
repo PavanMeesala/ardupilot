@@ -101,6 +101,7 @@ public:
         AUTOROTATE =   26,  // Autonomous autorotation
         AUTO_RTL =     27,  // Auto RTL, this is not a true mode, AUTO will report as this mode if entered to perform a DO_LAND_START Landing sequence
         TURTLE =       28,  // Flip over after crash
+        RESCUE =       29,  // Rescue mode for use in SAR mission
 
         // Mode number 30 reserved for "offboard" for external/lua control.
 
@@ -131,6 +132,7 @@ public:
     virtual bool is_autopilot() const = 0;
     virtual bool has_user_takeoff(bool must_navigate) const { return false; }
     virtual bool in_guided_mode() const { return false; }
+    virtual bool in_rescue_mode() const { return false; }
     virtual bool logs_attitude() const { return false; }
     virtual bool allows_save_trim() const { return false; }
     virtual bool allows_auto_trim() const { return false; }
@@ -1216,6 +1218,21 @@ private:
 
     // guided mode is paused or not
     static bool _paused;
+};
+
+class ModeRescue : public ModeGuided {
+public:
+    using ModeGuided::Mode;
+    Number mode_number() const override { return Number::RESCUE; }
+
+    bool init(bool ignore_checks) override;
+
+    bool in_rescue_mode() const override { return true; }
+    bool in_guided_mode() const override { return true; }  // treat as guided
+
+protected:
+    const char *name() const override { return "RESCUE"; }
+    const char *name4() const override { return "RESC"; }
 };
 
 #if AP_SCRIPTING_ENABLED
