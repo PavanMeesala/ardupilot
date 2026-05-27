@@ -278,141 +278,139 @@ constexpr int8_t Copter::_failsafe_priorities[7];
 
 #if AP_SCRIPTING_ENABLED || AP_EXTERNAL_CONTROL_ENABLED
 #if MODE_GUIDED_ENABLED
-// set target location (for use by external control and scripting)
 bool Copter::set_target_location(const Location& target_loc)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        return mode_rescue.set_destination(target_loc);
+    }
     return mode_guided.set_destination(target_loc);
 }
 
-// start takeoff to given altitude (for use by scripting)
 bool Copter::start_takeoff(const float alt_m)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        if (mode_rescue.do_user_takeoff_start_m(alt_m)) {
+            set_auto_armed(true);
+            return true;
+        }
+        return false;
+    }
     if (mode_guided.do_user_takeoff_start_m(alt_m)) {
-        copter.set_auto_armed(true);
+        set_auto_armed(true);
         return true;
     }
     return false;
 }
-#endif //MODE_GUIDED_ENABLED
-#endif //AP_SCRIPTING_ENABLED || AP_EXTERNAL_CONTROL_ENABLED
+#endif
+#endif
 
 #if AP_SCRIPTING_ENABLED
 #if MODE_GUIDED_ENABLED
-// set target position (for use by scripting)
 bool Copter::set_target_pos_NED(const Vector3f& target_pos_ned_m, bool use_yaw, float yaw_deg, bool use_yaw_rate, float yaw_rate_degs, bool yaw_relative, bool is_terrain_alt)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
     const Vector3p pos_neu_m{target_pos_ned_m.x, target_pos_ned_m.y, -target_pos_ned_m.z};
-
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        return mode_rescue.set_pos_NEU_m(pos_neu_m, use_yaw, radians(yaw_deg), use_yaw_rate, radians(yaw_rate_degs), yaw_relative, is_terrain_alt);
+    }
     return mode_guided.set_pos_NEU_m(pos_neu_m, use_yaw, radians(yaw_deg), use_yaw_rate, radians(yaw_rate_degs), yaw_relative, is_terrain_alt);
 }
 
-// set target position and velocity (for use by scripting)
 bool Copter::set_target_posvel_NED(const Vector3f& target_pos_ned_m, const Vector3f& target_vel_ned_ms)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
     const Vector3p pos_neu_m{target_pos_ned_m.x, target_pos_ned_m.y, -target_pos_ned_m.z};
     const Vector3f vel_neu_ms{target_vel_ned_ms.x, target_vel_ned_ms.y, -target_vel_ned_ms.z};
-
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        return mode_rescue.set_pos_vel_accel_NEU_m(pos_neu_m, vel_neu_ms, Vector3f());
+    }
     return mode_guided.set_pos_vel_accel_NEU_m(pos_neu_m, vel_neu_ms, Vector3f());
 }
 
-// set target position, velocity and acceleration (for use by scripting)
 bool Copter::set_target_posvelaccel_NED(const Vector3f& target_pos_ned_m, const Vector3f& target_vel_ned_ms, const Vector3f& target_accel_ned_mss, bool use_yaw, float yaw_deg, bool use_yaw_rate, float yaw_rate_degs, bool yaw_relative)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
     const Vector3p pos_neu_m{target_pos_ned_m.x, target_pos_ned_m.y, -target_pos_ned_m.z};
     const Vector3f vel_neu_ms{target_vel_ned_ms.x, target_vel_ned_ms.y, -target_vel_ned_ms.z};
     const Vector3f accel_neu_mss{target_accel_ned_mss.x, target_accel_ned_mss.y, -target_accel_ned_mss.z};
-
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        return mode_rescue.set_pos_vel_accel_NEU_m(pos_neu_m, vel_neu_ms, accel_neu_mss, use_yaw, radians(yaw_deg), use_yaw_rate, radians(yaw_rate_degs), yaw_relative);
+    }
     return mode_guided.set_pos_vel_accel_NEU_m(pos_neu_m, vel_neu_ms, accel_neu_mss, use_yaw, radians(yaw_deg), use_yaw_rate, radians(yaw_rate_degs), yaw_relative);
 }
 
 bool Copter::set_target_velocity_NED(const Vector3f& target_vel_ned_ms)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
     const Vector3f vel_neu_ms{target_vel_ned_ms.x, target_vel_ned_ms.y, -target_vel_ned_ms.z};
-    mode_guided.set_vel_NEU_ms(vel_neu_ms);
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        mode_rescue.set_vel_NEU_ms(vel_neu_ms);
+    } else {
+        mode_guided.set_vel_NEU_ms(vel_neu_ms);
+    }
     return true;
 }
 
-// set target velocity and acceleration (for use by scripting)
 bool Copter::set_target_velaccel_NED(const Vector3f& target_vel_ned_ms, const Vector3f& target_accel_ned_mss, bool use_yaw, float yaw_deg, bool use_yaw_rate, float yaw_rate_degs, bool relative_yaw)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
     const Vector3f vel_neu_ms{target_vel_ned_ms.x, target_vel_ned_ms.y, -target_vel_ned_ms.z};
     const Vector3f accel_neu_mss{target_accel_ned_mss.x, target_accel_ned_mss.y, -target_accel_ned_mss.z};
-
-    mode_guided.set_vel_accel_NEU_m(vel_neu_ms, accel_neu_mss, use_yaw, radians(yaw_deg), use_yaw_rate, radians(yaw_rate_degs), relative_yaw);
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        mode_rescue.set_vel_accel_NEU_m(vel_neu_ms, accel_neu_mss, use_yaw, radians(yaw_deg), use_yaw_rate, radians(yaw_rate_degs), relative_yaw);
+    } else {
+        mode_guided.set_vel_accel_NEU_m(vel_neu_ms, accel_neu_mss, use_yaw, radians(yaw_deg), use_yaw_rate, radians(yaw_rate_degs), relative_yaw);
+    }
     return true;
 }
 
-// set target roll pitch and yaw angles with throttle (for use by scripting)
 bool Copter::set_target_angle_and_climbrate(float roll_deg, float pitch_deg, float yaw_deg, float climb_rate_ms, bool use_yaw_rate, float yaw_rate_degs)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
     Quaternion q;
-    q.from_euler(radians(roll_deg),radians(pitch_deg),radians(yaw_deg));
-
-    mode_guided.set_angle(q, Vector3f{}, climb_rate_ms*100, false);
+    q.from_euler(radians(roll_deg), radians(pitch_deg), radians(yaw_deg));
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        mode_rescue.set_angle(q, Vector3f{}, climb_rate_ms, false);
+    } else {
+        mode_guided.set_angle(q, Vector3f{}, climb_rate_ms, false);
+    }
     return true;
 }
 
-// set target roll pitch and yaw rates with throttle (for use by scripting)
 bool Copter::set_target_rate_and_throttle(float roll_rate_dps, float pitch_rate_dps, float yaw_rate_dps, float throttle)
 {
-    // exit if vehicle is not in Guided mode or Auto-Guided mode
     if (!flightmode->in_guided_mode()) {
         return false;
     }
-
-    // Zero quaternion indicates rate control
     Quaternion q;
     q.zero();
-
-    // Convert from degrees per second to radians per second
-    Vector3f ang_vel_body { roll_rate_dps, pitch_rate_dps, yaw_rate_dps };
+    Vector3f ang_vel_body{roll_rate_dps, pitch_rate_dps, yaw_rate_dps};
     ang_vel_body *= DEG_TO_RAD;
-
-    // Pass to guided mode
-    mode_guided.set_angle(q, ang_vel_body, throttle, true);
+    if (flightmode->mode_number() == Mode::Number::RESCUE) {
+        mode_rescue.set_angle(q, ang_vel_body, throttle, true);
+    } else {
+        mode_guided.set_angle(q, ang_vel_body, throttle, true);
+    }
     return true;
 }
-
 // Register a custom mode with given number and names
 AP_Vehicle::custom_mode_state* Copter::register_custom_mode(const uint8_t num, const char* full_name, const char* short_name)
 {
