@@ -100,14 +100,6 @@ void ModeGuided::run()
     case SubMode::Angle:
         angle_control_run();
         break;
-    case SubMode::Rescue:
-        wp_control_run();
-
-        if (send_notification && wp_nav->reached_wp_destination()) {
-            send_notification = false;
-            gcs().send_mission_item_reached_message(0);
-        }
-        break;
     }
  }
 
@@ -182,21 +174,6 @@ bool ModeGuided::do_user_takeoff_start_m(float takeoff_alt_m)
     takeoff_complete = false;
 
     return true;
-}
-void ModeGuided::rescue_control_start()
-{
-    guided_mode = SubMode::Rescue;
-
-    wp_nav->wp_and_spline_init_m();
-
-    Vector3p stopping_point_neu_m;
-    wp_nav->get_wp_stopping_point_NEU_m(stopping_point_neu_m);
-
-    if (!wp_nav->set_wp_destination_NEU_m(stopping_point_neu_m, false)) {
-        INTERNAL_ERROR(AP_InternalError::error_t::flow_of_control);
-    }
-
-    auto_yaw.set_mode_to_default(false);
 }
 // initialise guided mode's waypoint navigation controller
 void ModeGuided::wp_control_start()
@@ -373,8 +350,7 @@ bool ModeGuided::set_pos_NEU_m(const Vector3p& pos_neu_m, bool use_yaw, float ya
     // if configured to use wpnav for position control
     if (use_wpnav_for_position_control()) {
         // ensure we are in position control mode
-        if (guided_mode != SubMode::WP &&
-            guided_mode != SubMode::Rescue) {
+        if (guided_mode != SubMode::WP) {
             wp_control_start();
         }
 
@@ -441,8 +417,6 @@ bool ModeGuided::get_wp(Location& destination) const
     switch (guided_mode) {
     case SubMode::WP:
         return wp_nav->get_oa_wp_destination(destination);
-    case SubMode::Rescue:
-        return wp_nav->get_oa_wp_destination(destination);
     case SubMode::Pos:
         destination = Location(guided_pos_target_neu_m.tofloat(), guided_is_terrain_alt ? Location::AltFrame::ABOVE_TERRAIN : Location::AltFrame::ABOVE_ORIGIN);
         return true;
@@ -474,8 +448,7 @@ bool ModeGuided::set_destination(const Location& dest_loc, bool use_yaw, float y
 
     // if using wpnav for position control
     if (use_wpnav_for_position_control()) {
-        if (guided_mode != SubMode::WP &&
-            guided_mode != SubMode::Rescue) {
+        if (guided_mode != SubMode::WP) {
             wp_control_start();
         }
 
@@ -1141,8 +1114,6 @@ float ModeGuided::wp_distance_m() const
     switch(guided_mode) {
     case SubMode::WP:
         return wp_nav->get_wp_distance_to_destination_m();
-    case SubMode::Rescue:
-        return wp_nav->get_wp_distance_to_destination_m();
     case SubMode::Pos:
         return get_horizontal_distance(pos_control->get_pos_estimate_NEU_m().xy().tofloat(), guided_pos_target_neu_m.xy().tofloat());
     case SubMode::PosVelAccel:
@@ -1156,8 +1127,6 @@ float ModeGuided::wp_bearing_deg() const
 {
     switch(guided_mode) {
     case SubMode::WP:
-        return degrees(wp_nav->get_wp_bearing_to_destination_rad());
-    case SubMode::Rescue:
         return degrees(wp_nav->get_wp_bearing_to_destination_rad());
     case SubMode::Pos:
         return degrees(get_bearing_rad(pos_control->get_pos_estimate_NEU_m().xy().tofloat(), guided_pos_target_neu_m.xy().tofloat()));
@@ -1178,8 +1147,6 @@ float ModeGuided::crosstrack_error_m() const
 {
     switch (guided_mode) {
     case SubMode::WP:
-        return wp_nav->crosstrack_error_m();
-    case SubMode::Rescue:
         return wp_nav->crosstrack_error_m();
     case SubMode::Pos:
     case SubMode::TakeOff:
