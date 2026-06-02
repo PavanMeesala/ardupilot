@@ -173,17 +173,154 @@
 #endif
 #endif
 
-//////////////////////////////////////////////////////////////////////////////
-// Custom Parameter - Detection threshold for Dynamic Land Mode
-#ifndef DETECTION_THRESHOLD_DEFAULT
- # define DETECTION_THRESHOLD_DEFAULT      0.3     // default value for detection threshold
-#endif
 
 //////////////////////////////////////////////////////////////////////////////
 // Rescue mode - control vehicle's position or angles from GCS
 #ifndef MODE_RESCUE_ENABLED
 # define MODE_RESCUE_ENABLED 1
 #endif
+
+// //////////////////////////////////////////////////////////////////////////////
+// // Custom Parameter - Detection threshold for Dynamic Land Mode
+// #if MODE_RESCUE_ENABLED
+
+// //Navigation Parameters
+// #ifndef WP_THR_DEFAULT
+//  # define WP_THR_DEFAULT                        3                   // in meters, threshold to consider that the drone has reached the waypoint
+// #endif
+// #ifndef WP_THR_END_DEFAULT
+//     # define WP_THR_END_DEFAULT                 50                  // in meters, threshold to consider that the drone has reached the waypoint for endurance
+// #endif
+// #ifndef DYN_TAR_THR_DEFAULT
+//  # define DYN_TAR_THR_DEFAULT                   4                   // in meters, threshold to consider that the drone has reached the dynamic target
+// #endif
+// #ifndef POS_MSG_SENT_RATE_DEFAULT
+//  # define POS_MSG_SENT_RATE_DEFAULT             0.1f                // in seconds, rate at which position messages are sent to the drone
+// #endif
+// #ifndef VEL_MSG_SENT_RATE_DEFAULT
+//  # define VEL_MSG_SENT_RATE_DEFAULT             0.033f              // in seconds, rate at which velocity messages are sent to the drone
+// #endif
+// #ifndef STP_ACC_DEFAULT
+//  # define STP_ACC_DEFAULT                       1.2f                // in m/s^2, deceleration to apply when stopping the drone
+// #endif
+// #ifndef MAX_STOP_DIS_DEFAULT
+//  # define MAX_STOP_DIS_DEFAULT                  15                  // in meters, max distance to create a hold point when the target is detected
+// #endif
+// #ifndef MISS_TIMOUT_DEFAULT
+//  # define MISS_TIMEOUT_DEFAULT                 1200                 // in seconds, timeout for the entire mission
+// #endif
+
+// // Round About Parameters
+// #ifndef INIT_ROUND_ABT_OR_DEFAULT
+//  # define INIT_ROUND_ABT_OR_DEFAULT   "cw"    // 'cw' for clockwise, 'ccw' for counterclockwise, initial orientation for the round about maneuver
+// #endif
+// #ifndef ROUND_ABT_ORBIT_RAD_DEFAULT
+//  # define ROUND_ABT_ORBIT_RAD_DEFAULT  30    // default radius of the round about orbit in m
+// #endif
+// #ifndef ROUND_ABT_ANG_SPD_DEG_DEFAULT
+//  # define ROUND_ABT_ANG_SPD_DEG_DEFAULT 18    // default angular speed during the round about in deg/s
+// #endif
+// #ifndef ROUND_ABT_INIT_THR_DEFAULT
+//  # define ROUND_ABT_INIT_THR_DEFAULT  100    // default throttle during the initial stage of the round about maneuver, as a fraction of maximum throttle
+// #endif
+
+// // Home Parameters
+// #ifndef FLW_LKAHD_FAC_DEFAULT
+//  # define FLW_LKAHD_FAC_DEFAULT       0.28    // default look-ahead factor for Follow mode in seconds, used to calculate the point ahead of the target that the vehicle should aim for
+// #endif
+// #ifndef FLW_TAR_ALT_DEFAULT
+//  # define FLW_TAR_ALT_DEFAULT         9   // default altitude to fly at in Follow mode in m
+// #endif
+
+// // Landing Parameters
+// #ifndef ALT_REST_CONE_FACTOR_DEFAULT
+//  # define ALT_REST_CONE_FACTOR_DEFAULT 0.89    // default altitude restriction cone factor for landing in Follow mode, between 0 and 1, where 1 means no cone and 0 means the vehicle must be at or below the altitude of the target to be able to land
+// #endif
+// #ifndef MAR_TIME_THR_DEFAULT
+//  # define MAR_TIME_THR_DEFAULT        5    // default time threshold for the minimum time to be below the altitude restriction cone for landing in Follow mode in seconds
+// #endif
+// #ifndef MAR_DET_THR_DEFAULT
+//  # define MAR_DET_THR_DEFAULT         7    // default detection threshold for determining if the vehicle is below the altitude restriction cone for landing in Follow mode, between 0 and 1, where 1 means perfectly below the cone and 0 means perfectly above the cone
+// #endif
+// #ifndef MOT_CUTOFF_THR_DEFAULT
+//  # define MOT_CUTOFF_THR_DEFAULT      0.5    // default throttle cutoff threshold for landing in Follow mode, as a fraction of maximum throttle
+// #endif
+
+// // Logging Parameters
+// #ifndef LOG_INT_DEFAULT
+//  # define LOG_INT_DEFAULT             0.05    // default logging interval in seconds for Follow mode
+// #endif
+
+// // Gimbal Parameters
+// #ifndef GMB_MSG_SENT_RATE_DEFAULT
+//  # define GMB_MSG_SENT_RATE_DEFAULT   0.05    // default rate at which gimbal control messages are sent in Hz
+// #endif
+// #ifndef GMB_HFOV_DEFAULT
+//  # define GMB_HFOV_DEFAULT            84.5   // default horizontal field of view of the gimbal in degrees, used to calculate the gimbal control angles
+// #endif
+// #ifndef GMB_VFOV_DEFAULT
+//  # define GMB_VFOV_DEFAULT            54.0   // default vertical field of view of the gimbal in degrees, used to calculate the gimbal control angles
+// #endif
+// #ifndef GMB_CAM_WID_DEFAULT
+//  # define GMB_CAM_WID_DEFAULT         1280    // default width of the gimbal camera in pixels, used to calculate the gimbal control angles
+// #endif
+// #ifndef GMB_CAM_HGT_DEFAULT
+//  # define GMB_CAM_HGT_DEFAULT         720     // default height of the gimbal camera in pixels, used to calculate the gimbal control angles
+// #endif
+// #ifndef GMB_CNTR_SMTH_FACT_DEFAULT
+//  # define GMB_CNTR_SMTH_FACT_DEFAULT 0.1    // default smoothing factor for the gimbal control angles, between 0 and 1, where 0 means no smoothing and 1 means complete smoothing (i.e. the gimbal control angles will not change)
+// #endif
+// #ifndef GMB_PIT_POINT_DEFAULT
+//  # define GMB_PIT_POI_POINT_DEFAULT   -70    // default point for the gimbal to aim at in the vertical direction, between 0 and 1, where 0 means the bottom of the camera view and 1 means the top of the camera view
+// #endif
+// #ifndef GMB_YAW_POINT_DEFAULT
+//  # define GMB_YAW_POINT_DEFAULT       0    // default point for the gimbal to aim at in the horizontal direction, between 0 and 1, where 0 means the left of the camera view and 1 means the right of the camera view
+// #endif
+// #ifndef GMB_PIT_COR_DEFAULT
+//  # define GMB_PIT_COR_DEFAULT         -60    // default correction angle for the gimbal in the vertical direction in degrees, used to correct for any misalignment of the gimbal in the vertical direction
+// #endif
+// #ifndef GMB_YAW_COR_DEFAULT
+//  # define GMB_YAW_COR_DEFAULT         30    // default correction angle for the gimbal in the horizontal direction in degrees, used to correct for any misalignment of the gimbal in the horizontal direction
+// #endif
+
+// // Detection Parameters
+// #ifndef DET_CNF_THR_DEFAULT
+//  # define DET_CNF_THR_DEFAULT         0.9     // default detection threshold for Follow mode in seconds, used to determine if the target is detected or not
+// #endif
+// #ifndef CLS_NAMES_DEFAULT
+//  # define CLS_NAMES_DEFAULT           ["person"]    // default class names for detection in Follow mode, used to determine if the detected target is the correct type or not
+// #endif
+// #ifndef DET_WIN_DUR_DEFAULT
+//  # define DET_WIN_DUR_DEFAULT         3     // default duration of the detection window in seconds, used to determine if the target is detected or not
+// #endif
+// #ifndef MIN_DET_TRACK_DEFAULT
+//  # define MIN_DET_TRACK_DEFAULT       10    // default minimum number of detections in the detection window required to consider the target detected
+// #endif
+// #ifndef MIN_DET_TRACK_INT_DEFAULT
+//  # define MIN_DET_TRACK_INT_DEFAULT   5    // default minimum number of detections in the detection window required to consider the target detected
+// #endif
+// #ifndef TRACK_TIMEOUT_DEFAULT
+//  # define TRACK_TIMEOUT_DEFAULT        5     // default time in seconds without detections before the target is considered lost
+// #endif
+
+// //Sensor Parameters
+// #ifndef RAD_MSG_ID_DEFAULT
+//  # define RAD_MSG_ID_DEFAULT          1     // default MAVLink message ID for the target's rangefinder distance, used to determine if the target is detected or not
+// #endif
+// #ifndef LID_MSG_ID_DEFAULT
+//  # define LID_MSG_ID_DEFAULT          0     // default MAVLink message ID for the target's lidar distance, used to determine if the target is detected or not
+// #endif
+// #ifndef LIFE_PWM_CH_DEFAULT
+//  # define LIFE_PWM_CH_DEFAULT         [9, 10, 11]     // default RC channel for the target's heartbeat signal, used to determine if the target is detected or not
+// #endif
+// #ifndef LIFE_PWM_VAL_DEFAULT
+//  # define LIFE_PWM_VAL_DEFAULT        [1800, 1800, 1700]    // default RC channel value for the target's heartbeat signal, used to determine if the target is detected or not
+// #endif
+// #ifndef LIFE+DEP_ALT_DEFAULT
+//  # define LIFE_DEP_ALT_DEFAULT        15    // default altitude in m above the target at which to maintain in Follow mode
+// #endif
+
+// #endif
 
 //////////////////////////////////////////////////////////////////////////////
 // Guided mode - control vehicle's position or angles from GCS

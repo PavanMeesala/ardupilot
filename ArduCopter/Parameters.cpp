@@ -1,5 +1,5 @@
 #include "Copter.h"
-
+#include "AP_Rescue_Params.h"
 #include <AP_Gripper/AP_Gripper.h>
 #include <AP_InertialSensor/AP_InertialSensor_rate_config.h>
 
@@ -295,12 +295,6 @@ const AP_Param::Info Copter::var_info[] = {
     // @User: Advanced
  
     GSCALAR(flight_mode7, "FLTMODE7", (uint8_t)FLIGHT_MODE_7),
-
-    // @Param: DETECT_THRESHOLD
-    // @DisplayName: Detection Threshold
-    // @Description: Custom parameter for detection threshold
-    // @User: Advanced
-    GSCALAR(detection_threshold, "DETECT_THRESH", DETECTION_THRESHOLD_DEFAULT), // stored as int but displayed as float
 
     // @Param: LOG_BITMASK
     // @DisplayName: Log bitmask
@@ -1258,6 +1252,9 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Range: 0.1 5
     // @User: Advanced
     AP_GROUPINFO("RESC_TIMEOUT", 15, ParametersG2, rescue_timeout, 3.0),
+    // @Group: RSC_
+    // @Path: AP_Rescue_Params.cpp
+    AP_SUBGROUPINFO(rescue,"RSC_",16,ParametersG2,AP_Rescue_Params),
 #endif
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION
@@ -1296,6 +1293,9 @@ ParametersG2::ParametersG2(void) :
 #endif
 #if MODE_FOLLOW_ENABLED
     ,follow()
+#endif
+#if MODE_RESCUE_ENABLED
+    ,rescue()
 #endif
 #if AUTOTUNE_ENABLED
     ,autotune_ptr(&copter.mode_autotune.autotune)

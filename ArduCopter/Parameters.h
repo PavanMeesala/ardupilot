@@ -12,6 +12,7 @@
 #if WEATHERVANE_ENABLED
  #include <AC_AttitudeControl/AC_WeatherVane.h>
 #endif
+#include "AP_Rescue_Params.h"
 
 // Global parameter class.
 //
@@ -232,10 +233,6 @@ public:
         k_param_rtl_speed_cms = 135,
         k_param_fs_batt_curr_rtl,
         k_param_rtl_cone_slope, // 137
-        //*********************************************** */
-        // custom parameter for detection threshold
-        k_param_detection_threshold, // 138
-        //************************************************  */
 
         //
         // 140: Sensor parameters
@@ -417,7 +414,6 @@ public:
 
     AP_Int8         wp_yaw_behavior;            // controls how the autopilot controls yaw during missions
 
-    AP_Float        detection_threshold;          // custom parameter for detection threshold
 #if MODE_POSHOLD_ENABLED
     AP_Int16        poshold_brake_rate_degs;    // PosHold flight mode's rotation rate during braking in deg/sec
     AP_Int16        poshold_brake_angle_max;    // PosHold flight mode's max lean angle during braking in centi-degrees
@@ -591,6 +587,9 @@ public:
 #if MODE_FOLLOW_ENABLED
     // follow
     AP_Follow follow;
+#endif
+#if MODE_RESCUE_ENABLED
+    AP_Rescue_Params rescue;
 #endif
 
 #if USER_PARAMS_ENABLED
