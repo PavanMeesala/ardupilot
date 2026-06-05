@@ -1282,6 +1282,27 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         copter.g2.toy_mode.handle_message(msg);
         break;
 #endif
+#if MODE_RESCUE_ENABLED
+    case MAVLINK_MSG_ID_RESCUE_WP: {
+        mavlink_rescue_wp_t pkt;
+        mavlink_msg_rescue_wp_decode(&msg, &pkt);
+        if (copter.flightmode->in_rescue_mode()) {
+            ModeRescue *rescue = static_cast<ModeRescue *>(copter.flightmode);
+            rescue->handle_rescue_wp(pkt.seq, pkt.total_count, pkt.lat, pkt.lon);
+        }
+        break;
+    }
+
+    case MAVLINK_MSG_ID_USER_WP_REACHED: {
+        mavlink_user_wp_reached_t pkt;
+        mavlink_msg_user_wp_reached_decode(&msg, &pkt);
+        if (copter.flightmode->in_rescue_mode()) {
+            ModeRescue *rescue = static_cast<ModeRescue *>(copter.flightmode);
+            rescue->handle_user_wp_reached(pkt.wp_index, pkt.reached);
+        }
+        break;
+    }
+#endif
     default:
         GCS_MAVLINK::handle_message(msg);
         break;

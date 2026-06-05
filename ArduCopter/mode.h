@@ -1224,15 +1224,28 @@ class ModeRescue : public ModeGuided {
 public:
     using ModeGuided::Mode;
     Number mode_number() const override { return Number::RESCUE; }
-
     bool init(bool ignore_checks) override;
-
     bool in_rescue_mode() const override { return true; }
-    bool in_guided_mode() const override { return true; }  // treat as guided
+    bool in_guided_mode() const override { return true; }
+    void handle_user_wp_reached(uint16_t wp_index, uint8_t reached);
+
+    // Add these:
+    void handle_rescue_wp(uint16_t seq, uint16_t total_count,
+                          int32_t lat_degE7, int32_t lon_degE7);
+    bool rescue_wps_complete() const { return _wp_count == _expected_count && _wp_count > 0; }
+    uint8_t rescue_wp_count() const { return _wp_count; }
 
 protected:
-    const char *name() const override { return "RESCUE"; }
+    const char *name()  const override { return "RESCUE"; }
     const char *name4() const override { return "RESC"; }
+
+private:
+    static constexpr uint8_t RESCUE_WP_MAX = 32;
+
+    Location _waypoints[RESCUE_WP_MAX];
+    uint8_t  _wp_count{0};
+    uint16_t _expected_count{0};
+    uint8_t  _current_idx{0};
 };
 
 #if AP_SCRIPTING_ENABLED
