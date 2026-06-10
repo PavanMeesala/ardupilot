@@ -992,6 +992,7 @@ private:
 
     virtual bool handle_guided_request(AP_Mission::Mission_Command &cmd) { return false; };
     virtual bool handle_rescue_request(AP_Mission::Mission_Command &cmd) { return false; };
+    virtual bool handle_dynamic_landing_request(AP_Mission::Mission_Command &cmd) { return false; };
     virtual void handle_change_alt_request(Location &location) {};
     void handle_common_mission_message(const mavlink_message_t &msg);
 

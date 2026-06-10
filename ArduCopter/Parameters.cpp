@@ -290,11 +290,18 @@ const AP_Param::Info Copter::var_info[] = {
     // custom flight mode
     // ****************************/
     // @Param: FLTMODE7
-    // @DisplayName: Flight Mode 7 (Custom Mode)
+    // @DisplayName: Flight Mode 7 (Rescue Mode)
     // @Description: Flight mode when pwm of Flightmode channel(FLTMODE_CH) is >=1880
     // @User: Advanced
  
     GSCALAR(flight_mode7, "FLTMODE7", (uint8_t)FLIGHT_MODE_7),
+
+    // @Param: FLTMODE8
+    // @DisplayName: Flight Mode 8 (Dynamic Landing Mode)
+    // @Description: Flight mode when pwm of Flightmode channel(FLTMODE_CH) is >=1880
+    // @User: Advanced
+
+    GSCALAR(flight_mode8, "FLTMODE8", (uint8_t)FLIGHT_MODE_8),
 
     // @Param: LOG_BITMASK
     // @DisplayName: Log bitmask

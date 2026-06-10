@@ -180,6 +180,12 @@
 # define MODE_RESCUE_ENABLED 1
 #endif
 
+//////////////////////////////////////////////////////////////////////////////
+// Dynamic Landing mode - allows vehicle to perform dynamic landing maneuvers
+#ifndef MODE_DYNAMIC_LANDING_ENABLED
+# define MODE_DYNAMIC_LANDING_ENABLED 1
+#endif
+
 // //////////////////////////////////////////////////////////////////////////////
 // // Custom Parameter - Detection threshold for Dynamic Land Mode
 // #if MODE_RESCUE_ENABLED
@@ -451,6 +457,9 @@
 
 #ifndef FLIGHT_MODE_7
  # define FLIGHT_MODE_7                  Mode::Number::STABILIZE
+#endif
+#ifndef FLIGHT_MODE_8
+ # define FLIGHT_MODE_8                  Mode::Number::STABILIZE
 #endif
 
 

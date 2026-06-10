@@ -233,6 +233,7 @@ public:
         k_param_rtl_speed_cms = 135,
         k_param_fs_batt_curr_rtl,
         k_param_rtl_cone_slope, // 137
+        k_param_flight_mode8,  // Dynamic Landing Mode
 
         //
         // 140: Sensor parameters
@@ -324,7 +325,8 @@ public:
         k_param_simple_modes,
         k_param_flight_mode_chan,
         k_param_initial_mode,
-        k_param_flight_mode7,  // Custom Mode
+        k_param_flight_mode7,  // Rescue Mode
+        
 
         //
         // 210: Waypoint data
@@ -443,7 +445,8 @@ public:
     AP_Int8         simple_modes;
     AP_Int8         flight_mode_chan;
     AP_Int8         initial_mode;
-    AP_Int8         flight_mode7;  // Custom Mode
+    AP_Int8         flight_mode7;  // Rescue Mode
+    AP_Int8         flight_mode8;  // Dynamic Landing Mode
 
     // Misc
     //
@@ -675,6 +678,10 @@ public:
 #if MODE_RESCUE_ENABLED
     AP_Int32 rescue_options;
     AP_Float rescue_timeout;
+#endif
+#if MODE_DYNAMIC_LANDING_ENABLED
+    AP_Int32 dynamic_landing_options;
+    AP_Float dynamic_landing_timeout;
 #endif
 
     AP_Int8                 surftrak_mode;

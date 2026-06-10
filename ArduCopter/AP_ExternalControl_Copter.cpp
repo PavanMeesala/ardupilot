@@ -26,6 +26,7 @@ bool AP_ExternalControl_Copter::set_linear_velocity_and_yaw_rate(const Vector3f 
         -linear_velocity.z };
     copter.mode_guided.set_vel_NEU_ms(velocity_neu_ms, false, 0, !isnan(yaw_rate_rads), checked_yaw_rate_rad);
     copter.mode_rescue.set_vel_NEU_ms(velocity_neu_ms, false, 0, !isnan(yaw_rate_rads), checked_yaw_rate_rad);
+    copter.mode_dynamic_landing.set_vel_NEU_ms(velocity_neu_ms, false, 0, !isnan(yaw_rate_rads), checked_yaw_rate_rad);
     return true;
 }
 

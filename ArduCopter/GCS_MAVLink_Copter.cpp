@@ -141,12 +141,13 @@ void GCS_MAVLINK_Copter::send_position_target_global_int()
 
 void GCS_MAVLINK_Copter::send_position_target_local_ned()
 {
-#if MODE_GUIDED_ENABLED || MODE_RESCUE_ENABLED
-    if (!copter.flightmode->in_guided_mode() && !copter.flightmode->in_rescue_mode()) {
+#if MODE_GUIDED_ENABLED || MODE_RESCUE_ENABLED || MODE_DYNAMIC_LANDING_ENABLED
+    if (!copter.flightmode->in_guided_mode() && !copter.flightmode->in_rescue_mode() && !copter.flightmode->in_dynamic_landing_mode()) {
         return;
     }
     const bool is_rescue = copter.flightmode->in_rescue_mode();
-    const ModeGuided::SubMode guided_mode = is_rescue ? ModeGuided::SubMode(copter.mode_rescue.submode()) : copter.mode_guided.submode();
+    const bool is_dynamic_landing = copter.flightmode->in_dynamic_landing_mode();
+    const ModeGuided::SubMode guided_mode =is_rescue ? ModeGuided::SubMode(copter.mode_rescue.submode()) : is_dynamic_landing ? ModeGuided::SubMode(copter.mode_dynamic_landing.submode()) : copter.mode_guided.submode();
     Vector3f target_pos_neu_m;
     Vector3f target_vel_neu_ms;
     Vector3f target_accel_neu_mss;
@@ -163,29 +164,35 @@ void GCS_MAVLINK_Copter::send_position_target_local_ned()
                     POSITION_TARGET_TYPEMASK_AX_IGNORE | POSITION_TARGET_TYPEMASK_AY_IGNORE | POSITION_TARGET_TYPEMASK_AZ_IGNORE |
                     POSITION_TARGET_TYPEMASK_YAW_IGNORE | POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE;
         target_pos_neu_m = is_rescue ?
-            copter.mode_rescue.get_target_pos_NEU_m().tofloat() :
+            copter.mode_rescue.get_target_pos_NEU_m().tofloat() : is_dynamic_landing ?
+            copter.mode_dynamic_landing.get_target_pos_NEU_m().tofloat() :
             copter.mode_guided.get_target_pos_NEU_m().tofloat();
         break;
     case ModeGuided::SubMode::PosVelAccel:
         type_mask = POSITION_TARGET_TYPEMASK_YAW_IGNORE | POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE;
         target_pos_neu_m = is_rescue ?
-            copter.mode_rescue.get_target_pos_NEU_m().tofloat() :
+            copter.mode_rescue.get_target_pos_NEU_m().tofloat() : is_dynamic_landing ?
+            copter.mode_dynamic_landing.get_target_pos_NEU_m().tofloat() :
             copter.mode_guided.get_target_pos_NEU_m().tofloat();
         target_vel_neu_ms = is_rescue ?
-            copter.mode_rescue.get_target_vel_NEU_ms() :
+            copter.mode_rescue.get_target_vel_NEU_ms() : is_dynamic_landing ?
+            copter.mode_dynamic_landing.get_target_vel_NEU_ms() :
             copter.mode_guided.get_target_vel_NEU_ms();
         target_accel_neu_mss = is_rescue ?
-            copter.mode_rescue.get_target_accel_NEU_mss() :
+            copter.mode_rescue.get_target_accel_NEU_mss() : is_dynamic_landing ?
+            copter.mode_dynamic_landing.get_target_accel_NEU_mss() :
             copter.mode_guided.get_target_accel_NEU_mss();
         break;
     case ModeGuided::SubMode::VelAccel:
         type_mask = POSITION_TARGET_TYPEMASK_X_IGNORE | POSITION_TARGET_TYPEMASK_Y_IGNORE | POSITION_TARGET_TYPEMASK_Z_IGNORE |
                     POSITION_TARGET_TYPEMASK_YAW_IGNORE | POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE;
         target_vel_neu_ms = is_rescue ?
-            copter.mode_rescue.get_target_vel_NEU_ms() :
+            copter.mode_rescue.get_target_vel_NEU_ms() : is_dynamic_landing ?
+            copter.mode_dynamic_landing.get_target_vel_NEU_ms() :
             copter.mode_guided.get_target_vel_NEU_ms();
         target_accel_neu_mss = is_rescue ?
-            copter.mode_rescue.get_target_accel_NEU_mss() :
+            copter.mode_rescue.get_target_accel_NEU_mss() : is_dynamic_landing ?
+            copter.mode_dynamic_landing.get_target_accel_NEU_mss() :
             copter.mode_guided.get_target_accel_NEU_mss();
         break;
     case ModeGuided::SubMode::Accel:
@@ -193,7 +200,8 @@ void GCS_MAVLINK_Copter::send_position_target_local_ned()
                     POSITION_TARGET_TYPEMASK_VX_IGNORE | POSITION_TARGET_TYPEMASK_VY_IGNORE | POSITION_TARGET_TYPEMASK_VZ_IGNORE |
                     POSITION_TARGET_TYPEMASK_YAW_IGNORE | POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE;
         target_accel_neu_mss = is_rescue ?
-            copter.mode_rescue.get_target_accel_NEU_mss() :
+            copter.mode_rescue.get_target_accel_NEU_mss() : is_dynamic_landing ?
+            copter.mode_dynamic_landing.get_target_accel_NEU_mss() :
             copter.mode_guided.get_target_accel_NEU_mss();
         break;
     }
@@ -1526,6 +1534,9 @@ uint8_t GCS_MAVLINK_Copter::send_available_mode(uint8_t index) const
 #endif
 #if MODE_RESCUE_ENABLED
         &copter.mode_rescue,
+#endif
+#if MODE_DYNAMIC_LANDING_ENABLED
+        &copter.mode_dynamic_landing,
 #endif
     };
 

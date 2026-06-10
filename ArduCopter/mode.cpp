@@ -156,6 +156,10 @@ Mode *Copter::mode_from_mode_num(const Mode::Number mode)
         case Mode::Number::RESCUE:
             return &mode_rescue;
 #endif
+#if MODE_DYNAMIC_LANDING_ENABLED
+        case Mode::Number::DYNAMIC_LANDING:
+            return &mode_dynamic_landing;
+#endif
 
         default:
             break;

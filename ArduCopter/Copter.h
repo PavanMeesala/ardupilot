@@ -228,6 +228,7 @@ public:
     friend class ModeAutorotate;
     friend class ModeTurtle;
     friend class ModeRescue;
+    friend class ModeDynamicLanding;
 
     friend class _AutoTakeoff;
 
@@ -261,7 +262,7 @@ private:
 
     // flight modes convenience array        k_param_flight_mode7,  // Custom Mode
     AP_Int8 *flight_modes;
-    const uint8_t num_flight_modes = 7;
+    const uint8_t num_flight_modes = 8;
 
     AP_SurfaceDistance rangefinder_state {ROTATION_PITCH_270, 0U};
     AP_SurfaceDistance rangefinder_up_state {ROTATION_PITCH_90, 1U};
@@ -1105,6 +1106,9 @@ private:
 #endif
 #if MODE_RESCUE_ENABLED
     ModeRescue mode_rescue;
+#endif
+#if MODE_DYNAMIC_LANDING_ENABLED
+    ModeDynamicLanding mode_dynamic_landing;
 #endif
 
     // mode.cpp
