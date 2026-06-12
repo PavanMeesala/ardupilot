@@ -1311,6 +1311,20 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         break;
     }
 #endif
+    case MAVLINK_MSG_ID_TARGET_PX: {
+        
+        mavlink_target_px_t pkt;
+        mavlink_msg_target_px_decode(&msg, &pkt);
+        gcs().send_text(MAV_SEVERITY_INFO, "Target PX:(dx : %u, dy: %u)", pkt.dx, pkt.dy);
+        for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+            mavlink_msg_target_px_send(
+                gcs().chan(c)->get_chan(),
+                pkt.dx,
+                pkt.dy
+            );
+        }
+        break;
+    }
     default:
         GCS_MAVLINK::handle_message(msg);
         break;
