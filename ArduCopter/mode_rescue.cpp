@@ -56,7 +56,7 @@ void ModeRescue::run()
 // ---------------------------------------------------------------------------
 float ModeRescue::rescue_nav_alt_m() const
 {
-    return g2.resc_nav_alt;
+    return g2.rescue.nav_alt;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ void ModeRescue::start_wp_nav()
     set_destination(dest);
 
     float alt_m;
-    dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m);
+    if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) {return;}
     gcs().send_text(MAV_SEVERITY_INFO, "Rescue: navigating to WP %u/%u (alt %.1fm)",
                     _current_idx + 1, _wp_count, (double)alt_m);
 }

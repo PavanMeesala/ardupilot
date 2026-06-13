@@ -1067,6 +1067,7 @@ private:
 
 
 class ModeGuided : public Mode {
+    friend class ModeRescue;
 
 public:
 #if AP_EXTERNAL_CONTROL_ENABLED
