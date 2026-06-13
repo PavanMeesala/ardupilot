@@ -11,6 +11,7 @@ public:
     static const struct AP_Param::GroupInfo var_info[];
 
     // Navigation
+    AP_Int16 nav_alt;
     AP_Int16 wp_thr;
     AP_Int16 wp_thr_end;
     AP_Int16 dyn_tar_thr;

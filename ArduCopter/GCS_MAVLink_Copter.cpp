@@ -1301,6 +1301,17 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         break;
     }
 
+    case MAVLINK_MSG_ID_RESCUE_START_SEARCH: {
+        mavlink_rescue_start_search_t pkt;
+        mavlink_msg_rescue_start_search_decode(&msg, &pkt);
+        if (pkt.target_system == mavlink_system.sysid &&
+            copter.flightmode->in_rescue_mode() && pkt.start == 1) {
+            ModeRescue *rescue = static_cast<ModeRescue *>(copter.flightmode);
+            rescue->handle_start_search();
+        }
+        break;
+    }
+
     case MAVLINK_MSG_ID_USER_WP_REACHED: {
         mavlink_user_wp_reached_t pkt;
         mavlink_msg_user_wp_reached_decode(&msg, &pkt);
@@ -1311,11 +1322,19 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         break;
     }
 #endif
+
     case MAVLINK_MSG_ID_TARGET_PX: {
-        
         mavlink_target_px_t pkt;
         mavlink_msg_target_px_decode(&msg, &pkt);
         gcs().send_text(MAV_SEVERITY_INFO, "Target PX:(dx : %u, dy: %u)", pkt.dx, pkt.dy);
+
+#if MODE_RESCUE_ENABLED
+        if (copter.flightmode->in_rescue_mode()) {
+            ModeRescue *rescue = static_cast<ModeRescue *>(copter.flightmode);
+            rescue->handle_target_detected();
+        }
+#endif
+
         for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
             mavlink_msg_target_px_send(
                 gcs().chan(c)->get_chan(),
@@ -1325,10 +1344,10 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         }
         break;
     }
+
     default:
         GCS_MAVLINK::handle_message(msg);
         break;
-    }
 }
 
 MAV_RESULT GCS_MAVLINK_Copter::handle_flight_termination(const mavlink_command_int_t &packet) {

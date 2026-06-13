@@ -1227,13 +1227,20 @@ public:
     using ModeGuided::Mode;
     Number mode_number() const override { return Number::RESCUE; }
     bool init(bool ignore_checks) override;
+    void run() override;
+
     bool in_rescue_mode() const override { return true; }
     bool in_guided_mode() const override { return true; }
-    void handle_user_wp_reached(uint16_t wp_index, uint8_t reached);
+    bool requires_GPS() const override { return true; }
+    bool has_manual_throttle() const override { return false; }
+    bool allows_arming(AP_Arming::Method method) const override { return true; }
 
-    // Add these:
+    void handle_user_wp_reached(uint16_t wp_index, uint8_t reached);
     void handle_rescue_wp(uint16_t seq, uint16_t total_count,
-                          int32_t lat_degE7, int32_t lon_degE7);
+                           int32_t lat_degE7, int32_t lon_degE7);
+    void handle_target_detected();
+    void handle_start_search();
+
     bool rescue_wps_complete() const { return _wp_count == _expected_count && _wp_count > 0; }
     uint8_t rescue_wp_count() const { return _wp_count; }
 
@@ -1244,10 +1251,28 @@ protected:
 private:
     static constexpr uint8_t RESCUE_WP_MAX = 32;
 
+    enum class RescuePhase : uint8_t {
+        IDLE     = 0,   // waypoints loaded, waiting for START_SEARCH
+        TAKEOFF  = 1,   // taking off to RESC_NAV_ALT before WP nav
+        WP_NAV   = 2,   // navigating RESCUE_WP list
+        GUIDED   = 3,   // target detected, OBC has full guided control
+    };
+
     Location _waypoints[RESCUE_WP_MAX];
     uint8_t  _wp_count{0};
     uint16_t _expected_count{0};
     uint8_t  _current_idx{0};
+
+    RescuePhase _phase{RescuePhase::IDLE};
+    bool _target_detected{false};
+
+    float rescue_nav_alt_m() const;
+    void apply_nav_alt(Location &loc) const;
+
+    void wp_nav_run();
+    void takeoff_run_phase();
+    void advance_to_next_wp();
+    void start_wp_nav();
 };
 class ModeDynamicLanding : public ModeGuided {
 public:
