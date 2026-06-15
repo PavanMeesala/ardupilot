@@ -1253,10 +1253,11 @@ private:
     static constexpr uint8_t RESCUE_WP_MAX = 32;
 
     enum class RescuePhase : uint8_t {
-        IDLE     = 0,   // waypoints loaded, waiting for START_SEARCH
-        TAKEOFF  = 1,   // taking off to RESC_NAV_ALT before WP nav
-        WP_NAV   = 2,   // navigating RESCUE_WP list
-        GUIDED   = 3,   // target detected, OBC has full guided control
+        IDLE        = 0,  // waiting for START_SEARCH
+        TAKEOFF     = 1,  // armed check pending, then will call takeoff
+        TAKING_OFF  = 2,  // climbing to RESC_NAV_ALT
+        WP_NAV      = 3,  // navigating RESCUE_WP list
+        GUIDED      = 4,  // target detected, OBC has full control
     };
 
     Location _waypoints[RESCUE_WP_MAX];
@@ -1266,14 +1267,20 @@ private:
 
     RescuePhase _phase{RescuePhase::IDLE};
     bool _target_detected{false};
+    bool _wpnav_initialised{false};   // true once wp_and_spline_init_m done for this search
 
     float rescue_nav_alt_m() const;
     void apply_nav_alt(Location &loc) const;
 
+    void takeoff_phase_run();
+    void taking_off_run();
     void wp_nav_run();
-    void takeoff_run_phase();
+    bool wp_nav_set_destination(const Location &dest);
     void advance_to_next_wp();
-    void start_wp_nav();
+    void notify_wp_reached(uint8_t idx);
+    void send_status();
+    uint32_t _last_status_send_ms{0};
+    static constexpr uint32_t STATUS_SEND_INTERVAL_MS = 1000; // 1hz
 };
 class ModeDynamicLanding : public ModeGuided {
 public:

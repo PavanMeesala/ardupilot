@@ -3,17 +3,17 @@
 #if MODE_RESCUE_ENABLED
 
 // ---------------------------------------------------------------------------
-// init: called when entering RESCUE mode
+// init
 // ---------------------------------------------------------------------------
 bool ModeRescue::init(bool ignore_checks)
 {
-    _current_idx     = 0;
-    _phase           = RescuePhase::IDLE;
-    _target_detected = false;
+    _current_idx       = 0;
+    _phase             = RescuePhase::IDLE;
+    _target_detected   = false;
+    _wpnav_initialised = false;
 
-    // Initialises Guided's controllers (defaults to velaccel submode).
-    // All Guided submodes (WP, Pos, Accel, VelAccel, PosVelAccel, Angle,
-    // TakeOff) remain available via inherited ModeGuided methods.
+    // Guided init defaults to velaccel submode; all guided submodes remain
+    // available via inherited ModeGuided methods.
     if (!ModeGuided::init(ignore_checks)) {
         return false;
     }
@@ -23,18 +23,23 @@ bool ModeRescue::init(bool ignore_checks)
 }
 
 // ---------------------------------------------------------------------------
-// run: main loop, called at 100hz+
+// run — 100hz+
 // ---------------------------------------------------------------------------
 void ModeRescue::run()
 {
+    send_status(); 
     switch (_phase) {
+
     case RescuePhase::IDLE:
-        // Hold / idle using Guided's default (velaccel, zeroed) controller
         ModeGuided::run();
         break;
 
     case RescuePhase::TAKEOFF:
-        takeoff_run_phase();
+        takeoff_phase_run();
+        break;
+
+    case RescuePhase::TAKING_OFF:
+        taking_off_run();
         break;
 
     case RescuePhase::WP_NAV:
@@ -42,26 +47,20 @@ void ModeRescue::run()
         break;
 
     case RescuePhase::GUIDED:
-        // ModeGuided::run() dispatches automatically to whichever submode
-        // (Pos / VelAccel / PosVelAccel / Accel / Angle / WP) the OBC last
-        // set via the corresponding set_xxx() call (triggered by
-        // SET_POSITION_TARGET_* / SET_ATTITUDE_TARGET handlers).
+        // All guided submodes (pos/vel/posvel/accel/angle) dispatched here
         ModeGuided::run();
         break;
     }
 }
 
 // ---------------------------------------------------------------------------
-// Helper: RESC_NAV_ALT in metres
+// Helpers
 // ---------------------------------------------------------------------------
 float ModeRescue::rescue_nav_alt_m() const
 {
     return g2.rescue.nav_alt;
 }
 
-// ---------------------------------------------------------------------------
-// Helper: apply RESC_NAV_ALT as alt-above-home if waypoint alt is unset
-// ---------------------------------------------------------------------------
 void ModeRescue::apply_nav_alt(Location &loc) const
 {
     if (loc.alt == 0) {
@@ -70,10 +69,75 @@ void ModeRescue::apply_nav_alt(Location &loc) const
 }
 
 // ---------------------------------------------------------------------------
-// TAKEOFF phase: drive Guided's TakeOff submode until complete, then start
-// WP navigation
+// wp_nav_set_destination — mimics Auto's wp_start():
+//   - initialises wp_nav ONCE per search (not on every waypoint)
+//   - on first call after takeoff, passes takeoff completion position as
+//     the spline origin so there is no discontinuity
+//   - on subsequent calls just sets destination, no reinit
 // ---------------------------------------------------------------------------
-void ModeRescue::takeoff_run_phase()
+bool ModeRescue::wp_nav_set_destination(const Location &dest)
+{
+    if (!_wpnav_initialised) {
+        Vector3p origin_neu_m;   // <-- was origin_ned_m
+        bool have_origin = false;
+        if (_phase == RescuePhase::TAKING_OFF || takeoff_complete) {
+            have_origin = auto_takeoff.get_completion_pos_neu_m(origin_neu_m);  // <-- fixed
+        }
+
+        if (have_origin) {
+            wp_nav->wp_and_spline_init_m(0, origin_neu_m);   // <-- was origin_ned_m
+        } else {
+            Vector3p stop_neu_m;
+            wp_nav->get_wp_stopping_point_NEU_m(stop_neu_m); // check your wp_nav API — may be get_wp_stopping_point_NED_m
+            wp_nav->wp_and_spline_init_m(0, stop_neu_m);
+        }
+        _wpnav_initialised = true;
+    }
+
+    if (!wp_nav->set_wp_destination_loc(dest)) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: failed to set WP destination");
+        return false;
+    }
+
+    auto_yaw.set_mode_to_default(false);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// TAKEOFF phase: wait until armed, then kick off takeoff
+// ---------------------------------------------------------------------------
+void ModeRescue::takeoff_phase_run()
+{
+    if (_target_detected) {
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target detected, switching to GUIDED");
+        _phase = RescuePhase::GUIDED;
+        velaccel_control_start();
+        return;
+    }
+
+    if (!motors->armed()) {
+        return;
+    }
+
+    // Armed: start the takeoff controller
+    if (!do_user_takeoff_start_m(rescue_nav_alt_m())) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: takeoff start failed, retrying");
+        return;
+    }
+
+    // Must set auto_armed manually — do_user_takeoff() wrapper does this
+    // but we call do_user_takeoff_start_m() directly to bypass its checks.
+    copter.set_auto_armed(true);
+
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: taking off to %.1fm",
+                    (double)rescue_nav_alt_m());
+    _phase = RescuePhase::TAKING_OFF;
+}
+
+// ---------------------------------------------------------------------------
+// TAKING_OFF phase: drive auto_takeoff, then start WP nav
+// ---------------------------------------------------------------------------
+void ModeRescue::taking_off_run()
 {
     if (_target_detected) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target detected during takeoff, switching to GUIDED");
@@ -82,83 +146,121 @@ void ModeRescue::takeoff_run_phase()
         return;
     }
 
-    // Drives auto_takeoff and sets takeoff_complete when done
+    // guided_mode == SubMode::TakeOff here, so ModeGuided::run() calls takeoff_run()
     ModeGuided::run();
 
-    if (is_taking_off() == false && takeoff_complete) {
+    // is_taking_off() == (guided_mode == TakeOff && !takeoff_complete)
+    // so this triggers the moment takeoff_complete goes true
+    if (!is_taking_off() && takeoff_complete) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: takeoff complete, starting search");
-        start_wp_nav();
+        _phase = RescuePhase::WP_NAV;
+
+        Location dest = _waypoints[_current_idx];
+        apply_nav_alt(dest);
+
+        if (!wp_nav_set_destination(dest)) {
+            // destination failed — hold at takeoff completion point
+            set_destination(copter.current_loc);
+            return;
+        }
+
+        float alt_m = 0.0f;
+        if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) {
+            alt_m = dest.alt * 0.01f;
+        }
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: navigating to WP %u/%u (alt %.1fm)",
+                        _current_idx + 1, _wp_count, (double)alt_m);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Begin / restart WP navigation at _current_idx
-// ---------------------------------------------------------------------------
-void ModeRescue::start_wp_nav()
-{
-    _phase = RescuePhase::WP_NAV;
-
-    Location dest = _waypoints[_current_idx];
-    apply_nav_alt(dest);
-
-    // Inherited from ModeGuided: switches guided_mode to SubMode::WP and
-    // configures wp_nav controller toward dest.
-    set_destination(dest);
-
-    float alt_m;
-    if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) {return;}
-    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: navigating to WP %u/%u (alt %.1fm)",
-                    _current_idx + 1, _wp_count, (double)alt_m);
-}
-
-// ---------------------------------------------------------------------------
-// WP_NAV phase
+// WP_NAV phase — runs wp_nav controller directly (like Auto's wp_run())
 // ---------------------------------------------------------------------------
 void ModeRescue::wp_nav_run()
 {
     if (_target_detected) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target detected, switching to GUIDED");
         _phase = RescuePhase::GUIDED;
-        // Reset Guided to velaccel submode at zero so stale WP targets don't
-        // cause a jump when OBC starts sending pos/vel/accel/attitude targets.
         velaccel_control_start();
         return;
     }
 
-    // Drives wp_nav controller (guided_mode == SubMode::WP)
-    ModeGuided::run();
+    // ---- replicate Auto's wp_run() exactly ----
 
+    // if not armed set throttle to zero and exit immediately
+    if (is_disarmed_or_landed()) {
+        make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
+        return;
+    }
+
+    // set motors to full range
+    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+
+    // run waypoint controller and record terrain failure
+    copter.failsafe_terrain_set_status(wp_nav->update_wpnav());
+
+    // call z-axis position controller (wp_nav already updated alt target)
+    pos_control->update_U_controller();
+
+    // call attitude controller with auto yaw
+    attitude_control->input_thrust_vector_heading(
+        pos_control->get_thrust_vector(), auto_yaw.get_heading());
+
+    // ---- check if destination reached ----
     if (wp_nav->reached_wp_destination()) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u reached", _current_idx + 1);
-
-        for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-            mavlink_msg_user_wp_reached_send(
-                gcs().chan(c)->get_chan(),
-                _current_idx,
-                1
-            );
-        }
-
+        notify_wp_reached(_current_idx);
         advance_to_next_wp();
     }
 }
 
 // ---------------------------------------------------------------------------
-// Advance to next waypoint, or hold position if list exhausted
+// Advance to next WP or hold at last one
 // ---------------------------------------------------------------------------
 void ModeRescue::advance_to_next_wp()
 {
     if (_current_idx + 1 < _wp_count) {
         _current_idx++;
-        start_wp_nav();
+
+        Location dest = _waypoints[_current_idx];
+        apply_nav_alt(dest);
+
+        if (!wp_nav_set_destination(dest)) {
+            gcs().send_text(MAV_SEVERITY_WARNING,
+                            "Rescue: failed to set WP %u, holding", _current_idx + 1);
+            set_destination(copter.current_loc);
+            return;
+        }
+
+        float alt_m = 0.0f;
+        if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) {
+            alt_m = dest.alt * 0.01f;
+        }
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: navigating to WP %u/%u (alt %.1fm)",
+                        _current_idx + 1, _wp_count, (double)alt_m);
     } else {
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: all WPs done, holding position");
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: all %u WPs done, holding position", _wp_count);
         set_destination(copter.current_loc);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Receive RESCUE_WP from GCS/OBC
+// Send USER_WP_REACHED to all GCS channels
+// ---------------------------------------------------------------------------
+void ModeRescue::notify_wp_reached(uint8_t idx)
+{
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u reached", idx + 1);
+
+    for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+        mavlink_msg_user_wp_reached_send(
+            gcs().chan(c)->get_chan(),
+            idx,    // wp_index (0-based, matches how you sent them)
+            1       // reached = true
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Receive RESCUE_WP
 // ---------------------------------------------------------------------------
 void ModeRescue::handle_rescue_wp(uint16_t seq, uint16_t total_count,
                                    int32_t lat_degE7, int32_t lon_degE7)
@@ -175,7 +277,7 @@ void ModeRescue::handle_rescue_wp(uint16_t seq, uint16_t total_count,
     Location wp{};
     wp.lat          = lat_degE7;
     wp.lng          = lon_degE7;
-    wp.alt          = 0;            // resolved later via RESC_NAV_ALT
+    wp.alt          = 0;        // alt applied later via RESC_NAV_ALT
     wp.relative_alt = false;
     _waypoints[seq] = wp;
 
@@ -185,7 +287,8 @@ void ModeRescue::handle_rescue_wp(uint16_t seq, uint16_t total_count,
 
     if (rescue_wps_complete()) {
         gcs().send_text(MAV_SEVERITY_INFO,
-                        "RESCUE_WP: all %u waypoints received, awaiting START_SEARCH", _wp_count);
+                        "RESCUE_WP: all %u waypoints received, awaiting START_SEARCH",
+                        _wp_count);
 
         for (uint8_t i = 0; i < _wp_count; i++) {
             for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
@@ -198,50 +301,61 @@ void ModeRescue::handle_rescue_wp(uint16_t seq, uint16_t total_count,
                 );
             }
         }
-        // stays IDLE until handle_start_search() is called
     }
 }
 
 // ---------------------------------------------------------------------------
-// RESCUE_START_SEARCH: takeoff (if landed) then WP nav
+// RESCUE_START_SEARCH received
 // ---------------------------------------------------------------------------
 void ModeRescue::handle_start_search()
 {
     if (copter.flightmode != this) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: not in RESCUE mode, ignoring START_SEARCH");
+        gcs().send_text(MAV_SEVERITY_WARNING,
+                        "Rescue: not in RESCUE mode, ignoring START_SEARCH");
         return;
     }
 
     if (_wp_count == 0) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: no waypoints loaded, ignoring START_SEARCH");
+        gcs().send_text(MAV_SEVERITY_WARNING,
+                        "Rescue: no waypoints loaded, ignoring START_SEARCH");
         return;
     }
 
+    // Silently absorb GCS retries once search is queued or running
     if (_phase != RescuePhase::IDLE) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: search already in progress");
         return;
     }
 
-    _current_idx = 0;
+    _current_idx       = 0;
+    _target_detected   = false;
+    _wpnav_initialised = false;   // reset so wp_and_spline_init_m fires fresh
 
     if (copter.ap.land_complete) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: taking off to %.1fm before search",
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "Rescue: search queued, will take off to %.1fm when armed",
                         (double)rescue_nav_alt_m());
-
-        if (!do_user_takeoff_start_m(rescue_nav_alt_m())) {
-            gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: takeoff failed, aborting search start");
-            return;
-        }
-
         _phase = RescuePhase::TAKEOFF;
     } else {
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: starting search through %u waypoints", _wp_count);
-        start_wp_nav();
+        // Already airborne — go directly to WP nav
+        _phase = RescuePhase::WP_NAV;
+
+        Location dest = _waypoints[_current_idx];
+        apply_nav_alt(dest);
+
+        if (wp_nav_set_destination(dest)) {
+            float alt_m = 0.0f;
+            if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) {
+                alt_m = dest.alt * 0.01f;
+            }
+            gcs().send_text(MAV_SEVERITY_INFO,
+                            "Rescue: starting search, navigating to WP 1/%u (alt %.1fm)",
+                            _wp_count, (double)alt_m);
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Called when OBC reports a detected target (via TARGET_PX handler)
+// TARGET_PX received — target detected by OBC
 // ---------------------------------------------------------------------------
 void ModeRescue::handle_target_detected()
 {
@@ -249,21 +363,41 @@ void ModeRescue::handle_target_detected()
 }
 
 // ---------------------------------------------------------------------------
-// Forward user-wp-reached status to all GCS channels
+// USER_WP_REACHED — called by GCS/OBC to manually report a WP status
 // ---------------------------------------------------------------------------
 void ModeRescue::handle_user_wp_reached(uint16_t wp_index, uint8_t reached)
 {
-    if (reached) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Waypoint %u reached", wp_index);
-    } else {
-        gcs().send_text(MAV_SEVERITY_INFO, "Waypoint %u not reached", wp_index);
-    }
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u %s",
+                    wp_index + 1, reached ? "reached" : "not reached");
 
     for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
         mavlink_msg_user_wp_reached_send(
             gcs().chan(c)->get_chan(),
             wp_index,
             reached
+        );
+    }
+}
+void ModeRescue::send_status()
+{
+    const uint32_t now = AP_HAL::millis();
+    if (now - _last_status_send_ms < STATUS_SEND_INTERVAL_MS) {
+        return;
+    }
+    _last_status_send_ms = now;
+
+    const uint8_t phase      = static_cast<uint8_t>(_phase);
+    const uint8_t wp_total   = _wp_count;
+    const uint8_t wp_current = _current_idx;
+    const uint8_t wps_loaded = rescue_wps_complete() ? 1 : 0;
+
+    for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+        mavlink_msg_rescue_status_send(
+            gcs().chan(c)->get_chan(),
+            phase,
+            wp_total,
+            wp_current,
+            wps_loaded
         );
     }
 }

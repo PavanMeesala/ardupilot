@@ -376,14 +376,14 @@ const AP_Param::GroupInfo AP_Rescue_Params::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("LIFE_ALT",43,AP_Rescue_Params,life_dep_alt,15),
 
-    // @Param: TAKEOFF_ALT
-    // @DisplayName: Drone Takeoff Altitude
-    // @Description: Altitude above the home to which the drone will ascend during takeoff.
+    // @Param: NAV_ALT
+    // @DisplayName: Navigation Altitude
+    // @Description: Altitude above the home to which the drone will ascend during navigation.
     // @Units: m
     // @Range: 1 100
     // @Increment: 1
     // @User: Advanced
-    AP_GROUPINFO("TAKEOFF_ALT",44,AP_Rescue_Params,nav_alt,10),
+    AP_GROUPINFO("NAV_ALT",44,AP_Rescue_Params,nav_alt,10),
 
     AP_GROUPEND
 };
