@@ -1268,6 +1268,7 @@ private:
     RescuePhase _phase{RescuePhase::IDLE};
     bool _target_detected{false};
     bool _wpnav_initialised{false};   // true once wp_and_spline_init_m done for this search
+    bool _wp_reached{false}; 
 
     float rescue_nav_alt_m() const;
     void apply_nav_alt(Location &loc) const;

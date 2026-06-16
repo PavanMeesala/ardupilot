@@ -116,17 +116,18 @@ void ModeRescue::takeoff_phase_run()
     }
 
     if (!motors->armed()) {
-        return;
+        if (!copter.arming.arm(AP_Arming::Method::MAVLINK)) {
+            // Pre-arm checks not passing yet — retry next loop
+            return;
+        }
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: auto-armed for search");
     }
 
-    // Armed: start the takeoff controller
     if (!do_user_takeoff_start_m(rescue_nav_alt_m())) {
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: takeoff start failed, retrying");
         return;
     }
 
-    // Must set auto_armed manually — do_user_takeoff() wrapper does this
-    // but we call do_user_takeoff_start_m() directly to bypass its checks.
     copter.set_auto_armed(true);
 
     gcs().send_text(MAV_SEVERITY_INFO, "Rescue: taking off to %.1fm",
@@ -238,7 +239,7 @@ void ModeRescue::advance_to_next_wp()
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: navigating to WP %u/%u (alt %.1fm)",
                         _current_idx + 1, _wp_count, (double)alt_m);
     } else {
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: all %u WPs done, holding position", _wp_count);
+        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: all %u WPs done, holding position", _wp_count);
         set_destination(copter.current_loc);
     }
 }
@@ -321,22 +322,24 @@ void ModeRescue::handle_start_search()
         return;
     }
 
-    // Silently absorb GCS retries once search is queued or running
     if (_phase != RescuePhase::IDLE) {
         return;
     }
 
     _current_idx       = 0;
     _target_detected   = false;
-    _wpnav_initialised = false;   // reset so wp_and_spline_init_m fires fresh
+    _wpnav_initialised = false;
+    _wp_reached        = false;
 
     if (copter.ap.land_complete) {
         gcs().send_text(MAV_SEVERITY_INFO,
-                        "Rescue: search queued, will take off to %.1fm when armed",
+                        "Rescue: arming and taking off to %.1fm",
                         (double)rescue_nav_alt_m());
         _phase = RescuePhase::TAKEOFF;
     } else {
-        // Already airborne — go directly to WP nav
+        // Already airborne
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "Rescue: starting search through %u waypoints", _wp_count);
         _phase = RescuePhase::WP_NAV;
 
         Location dest = _waypoints[_current_idx];
@@ -348,7 +351,7 @@ void ModeRescue::handle_start_search()
                 alt_m = dest.alt * 0.01f;
             }
             gcs().send_text(MAV_SEVERITY_INFO,
-                            "Rescue: starting search, navigating to WP 1/%u (alt %.1fm)",
+                            "Rescue: navigating to WP 1/%u (alt %.1fm)",
                             _wp_count, (double)alt_m);
         }
     }
