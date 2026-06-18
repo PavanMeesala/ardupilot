@@ -156,62 +156,6 @@ void ModeRescue::echo_wps_to_gcs()
 }
 
 // ---------------------------------------------------------------------------
-// handle_generate_wps — NEW handler for GENERATE_WPS message
-// Flow: generate pattern → echo to GCS → enter WPS_GENERATED phase
-//       → wait for START_SEARCH confirmation from GCS
-// ---------------------------------------------------------------------------
-void ModeRescue::handle_generate_wps(uint16_t length_m)
-{
-    if (copter.flightmode != this) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: GENERATE_WPS ignored — not in RESCUE mode");
-        return;
-    }
-
-    // Allow regeneration from IDLE or WPS_GENERATED (user may want to adjust)
-    if (_phase != RescuePhase::IDLE && _phase != RescuePhase::WPS_GENERATED) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: GENERATE_WPS ignored — mission already in progress (phase %u)",
-            (uint8_t)_phase);
-        return;
-    }
-
-    // Need GPS fix to generate meaningful waypoints
-    if (copter.current_loc.lat == 0 && copter.current_loc.lng == 0) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: GENERATE_WPS rejected — no GPS fix");
-        return;
-    }
-
-    const float dist_m = (float)length_m;
-
-    gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: generating lawn pattern (length=%.0fm)...", (double)dist_m);
-
-    // Reset WP state before generating
-    _wp_count          = 0;
-    _expected_count    = 0;
-    _wps_from_generate = true;
-
-    if (!generate_lawn_pattern(dist_m)) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: pattern generation failed");
-        _phase = RescuePhase::IDLE;
-        return;
-    }
-
-    // Echo all generated WPs to GCS so they can be displayed on the map
-    echo_wps_to_gcs();
-
-    // Enter WPS_GENERATED: hold position, wait for START_SEARCH confirmation
-    _phase = RescuePhase::WPS_GENERATED;
-
-    // Send status immediately so QGC sees the phase change
-    _last_status_ms = 0;
-    send_status();
-}
-
-// ---------------------------------------------------------------------------
 // wp_nav_set_destination — init wp_nav ONCE (Auto-style), then just set dest
 // ---------------------------------------------------------------------------
 bool ModeRescue::wp_nav_set_destination(const Location &dest)
