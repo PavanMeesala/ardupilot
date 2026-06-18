@@ -76,4 +76,14 @@ public:
     AP_Int16 life_pwm_val3;
 
     AP_Int16 life_dep_alt;
+    AP_Float hfov;
+    AP_Float search_dist;
+    AP_Float overlap;
+    AP_Float lookahead_fac;
+    AP_Float life_deploy_alt;
+    AP_Float center_max_spd;
+    AP_Float center_dz;
+    AP_Float marker_timeout;
+    AP_Float land_dz;
+    AP_Float motor_cutoff_alt;
 };

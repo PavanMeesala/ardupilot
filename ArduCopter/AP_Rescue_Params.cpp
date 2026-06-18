@@ -384,6 +384,83 @@ const AP_Param::GroupInfo AP_Rescue_Params::var_info[] = {
     // @Increment: 1
     // @User: Advanced
     AP_GROUPINFO("NAV_ALT",44,AP_Rescue_Params,nav_alt,10),
+    // @Param: HFOV
+    // @DisplayName: Camera Horizontal FOV
+    // @Description: Horizontal field of view of the downward camera used for lawn pattern strip spacing calculation
+    // @Units: deg
+    // @Range: 10 180
+    // @User: Standard
+    AP_GROUPINFO("HFOV", 45, AP_Rescue_Params, hfov, 90.0f),
+
+    // @Param: SRCH_DIST
+    // @DisplayName: Search area distance
+    // @Description: Total search area dimension in metres for lawn mower pattern generation
+    // @Units: m
+    // @Range: 50 2000
+    // @User: Standard
+    AP_GROUPINFO("SRCH_DIST", 46, AP_Rescue_Params, search_dist, 300.0f),
+
+    // @Param: OVLP
+    // @DisplayName: Path overlap factor
+    // @Description: Overlap between adjacent search strips. 0=no overlap, 0.5=50% overlap
+    // @Range: 0.0 0.9
+    // @User: Standard
+    AP_GROUPINFO("OVLP", 47, AP_Rescue_Params, overlap, 0.2f),
+
+    // @Param: LKA_FAC
+    // @DisplayName: Lookahead factor for beacon follow
+    // @Description: Multiplied by beacon speed to compute lookahead distance during GPS follow
+    // @Range: 0.0 2.0
+    // @User: Advanced
+    AP_GROUPINFO("LKA_FAC", 48, AP_Rescue_Params, lookahead_fac, 0.28f),
+
+    // @Param: LIFE_ALT
+    // @DisplayName: Lifebuoy deploy altitude
+    // @Description: Relative altitude at which lifebuoy is deployed during centering descent
+    // @Units: m
+    // @Range: 1 50
+    // @User: Standard
+    AP_GROUPINFO("LIFE_ALT", 49, AP_Rescue_Params, life_deploy_alt, 15.0f),
+
+    // @Param: CTR_SPD
+    // @DisplayName: Centering max speed
+    // @Description: Maximum body-frame velocity during pixel centering above target
+    // @Units: m/s
+    // @Range: 0.1 5.0
+    // @User: Advanced
+    AP_GROUPINFO("CTR_SPD", 50, AP_Rescue_Params, center_max_spd, 1.5f),
+
+    // @Param: CTR_DZ
+    // @DisplayName: Centering descent velocity
+    // @Description: Downward velocity applied while descending to lifebuoy deploy altitude
+    // @Units: m/s
+    // @Range: 0.1 3.0
+    // @User: Advanced
+    AP_GROUPINFO("CTR_DZ", 51, AP_Rescue_Params, center_dz, 0.3f),
+
+    // @Param: MKR_TOUT
+    // @DisplayName: Marker lost timeout
+    // @Description: Seconds marker may be absent before reverting to GPS beacon follow
+    // @Units: s
+    // @Range: 1 30
+    // @User: Advanced
+    AP_GROUPINFO("MKR_TOUT", 52, AP_Rescue_Params, marker_timeout, 5.0f),
+
+    // @Param: LND_DZ
+    // @DisplayName: Landing descent velocity
+    // @Description: Downward body velocity during marker-guided descent
+    // @Units: m/s
+    // @Range: 0.05 1.0
+    // @User: Advanced
+    AP_GROUPINFO("LND_DZ", 53, AP_Rescue_Params, land_dz, 0.3f),
+
+    // @Param: MOT_CUT_ALT
+    // @DisplayName: Motor cutoff altitude
+    // @Description: Lidar altitude below which motors are disarmed on touchdown
+    // @Units: m
+    // @Range: 0.1 1.0
+    // @User: Advanced
+    AP_GROUPINFO("MOT_CUT_ALT", 54, AP_Rescue_Params, motor_cutoff_alt, 0.5f),
 
     AP_GROUPEND
 };
