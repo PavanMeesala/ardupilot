@@ -1292,6 +1292,7 @@ private:
     // Inserted WP
     Location _inserted_wp{};
     bool     _has_inserted_wp{false};
+    uint16_t _insert_nav_number = 0;
 
     // State
     RescuePhase _phase{RescuePhase::IDLE};

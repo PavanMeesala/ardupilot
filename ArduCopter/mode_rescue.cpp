@@ -66,15 +66,16 @@ void ModeRescue::apply_nav_alt(Location &loc) const
 // ---------------------------------------------------------------------------
 bool ModeRescue::generate_lawn_pattern(float total_dist_m)
 {
-    const float alt_m    = (float)g2.rescue.nav_alt;       // AP_Float
-    const float hfov_rad = radians((float)g2.rescue.gmb_hfov); // AP_Float
+    const float alt_m    = (float)g2.rescue.nav_alt;
+    const float hfov_rad = radians((float)g2.rescue.gmb_hfov);
     const float overlap  = 0.2f;
-    const float strip_w  = 2.0f * alt_m * tanf(hfov_rad * 0.5f) * (1.0f - overlap);
 
-    if (strip_w < 0.5f) {
+    const float ground_w = 2.0f * alt_m * tanf(hfov_rad * 0.5f) * (1.0f - overlap);
+
+    if (ground_w < 0.5f) {
         gcs().send_text(MAV_SEVERITY_WARNING,
             "Rescue: strip width %.2fm too small, check RSC_NAV_ALT/RSC_GMB_HFOV",
-            (double)strip_w);
+            (double)ground_w);
         return false;
     }
 
@@ -84,47 +85,82 @@ bool ModeRescue::generate_lawn_pattern(float total_dist_m)
         return false;
     }
 
+    const int n_pairs = MAX(1, (int)(total_dist_m / ground_w));
+
     const float start_lat = copter.current_loc.lat * 1e-7f;
     const float start_lon = copter.current_loc.lng * 1e-7f;
-    const float hdg_rad   = radians(copter.ahrs.yaw_sensor * 0.01f);
+    const float hdg_deg   = copter.ahrs.yaw_sensor * 0.01f;
+    const float hdg_rad   = radians(hdg_deg);
 
-    const float fwd_n = cosf(hdg_rad);
-    const float fwd_e = sinf(hdg_rad);
-    const float rgt_n = cosf(hdg_rad + M_PI_2);
-    const float rgt_e = sinf(hdg_rad + M_PI_2);
+    const float fwd_n    =  cosf(hdg_rad);
+    const float fwd_e    =  sinf(hdg_rad);
+    const float lshift_n =  fwd_e;
+    const float lshift_e = -fwd_n;
+
+    const float max_half_width = total_dist_m * 0.5f;
 
     const float R        = 6378137.0f;
     const float lat0_rad = radians(start_lat);
-    const int   n_strips = (int)(total_dist_m / strip_w);
+
+    auto ne_to_loc = [&](float north_m, float east_m) -> Location {
+        Location loc{};
+        loc.lat          = (int32_t)((start_lat + degrees(north_m / R)) * 1e7f);
+        loc.lng          = (int32_t)((start_lon +
+                            degrees(east_m / (R * cosf(lat0_rad)))) * 1e7f);
+        loc.alt          = 0;
+        loc.relative_alt = false;
+        return loc;
+    };
 
     _wp_count       = 0;
     _expected_count = 0;
 
-    auto add_wp = [&](float north_m, float east_m) -> bool {
-        if (_wp_count >= RESCUE_WP_MAX) return false;
-        Location wp{};
-        wp.lat          = (int32_t)((start_lat + degrees(north_m / R)) * 1e7f);
-        wp.lng          = (int32_t)((start_lon +
-                           degrees(east_m / (R * cosf(lat0_rad)))) * 1e7f);
-        wp.alt          = 0;
-        wp.relative_alt = false;
-        _waypoints[_wp_count++] = wp;
-        return true;
-    };
+    for (int k = 0; k < n_pairs && _wp_count < (int)RESCUE_WP_MAX - 1; k++) {
 
-    for (int s = 0; s < n_strips && _wp_count < (int)RESCUE_WP_MAX - 1; s++) {
-        const float side = (s + 0.5f) * strip_w;
-        const float dir  = (s % 2 == 0) ? 1.0f : -1.0f;
-        if (!add_wp(rgt_n * side, rgt_e * side)) break;
-        if (!add_wp(rgt_n * side + fwd_n * total_dist_m * dir,
-                    rgt_e * side + fwd_e * total_dist_m * dir)) break;
+        // frac goes 0→1 as k goes 0→last
+        const float frac = (n_pairs > 1) ? (float)k / (float)(n_pairs - 1) : 0.5f;
+
+        // Forward distance: k=0 → near drone (fwd_dist small)
+        //                   k=last → far end (fwd_dist = total_dist_m)
+        // This makes drone fly AWAY from itself, expanding as it goes
+        const float fwd_dist = total_dist_m * frac;
+
+        // Half-width: small near drone (frac=0), large at far end (frac=1)
+        const float half_w = max_half_width * frac;
+
+        // Centre of cross-strip
+        const float ctr_n = fwd_dist * fwd_n;
+        const float ctr_e = fwd_dist * fwd_e;
+
+        // Left and right endpoints of cross-strip
+        const float left_n  = ctr_n + half_w * lshift_n;
+        const float left_e  = ctr_e + half_w * lshift_e;
+        const float right_n = ctr_n - half_w * lshift_n;
+        const float right_e = ctr_e - half_w * lshift_e;
+
+        Location left_wp  = ne_to_loc(left_n,  left_e);
+        Location right_wp = ne_to_loc(right_n, right_e);
+
+        // Snake pattern: alternate direction each strip
+        if (k % 2 == 0) {
+            // Even: right → left
+            _waypoints[_wp_count++] = right_wp;
+            if (_wp_count >= RESCUE_WP_MAX) break;
+            _waypoints[_wp_count++] = left_wp;
+        } else {
+            // Odd: left → right (continue from previous left)
+            _waypoints[_wp_count++] = left_wp;
+            if (_wp_count >= RESCUE_WP_MAX) break;
+            _waypoints[_wp_count++] = right_wp;
+        }
     }
 
     _expected_count = _wp_count;
 
     gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: generated %u lawn WPs (length=%.0fm strip=%.1fm)",
-        _wp_count, (double)total_dist_m, (double)strip_w);
+        "Rescue: %u WPs, %d strips, hdg=%.0f° len=%.0fm strip=%.1fm",
+        _wp_count, n_pairs,
+        (double)hdg_deg, (double)total_dist_m, (double)ground_w);
 
     return _wp_count > 0;
 }
@@ -290,7 +326,7 @@ void ModeRescue::wp_nav_run()
         pos_control->get_thrust_vector(), auto_yaw.get_heading());
 
     if (wp_nav->reached_wp_destination()) {
-        notify_wp_reached(_current_idx);
+        notify_wp_reached(_current_idx + _insert_nav_number);
         advance_to_next_wp();
     }
 }
@@ -324,6 +360,8 @@ void ModeRescue::insert_nav_run()
         gcs().send_text(MAV_SEVERITY_INFO,
             "Rescue: inserted WP reached, resuming pattern at WP %u/%u",
             _current_idx + 1, _wp_count);
+        notify_wp_reached(_current_idx+_insert_nav_number);
+        _insert_nav_number++;
         _phase = RescuePhase::WP_NAV;
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
@@ -520,8 +558,8 @@ void ModeRescue::advance_to_next_wp()
         if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) {
             alt_m = dest.alt * 0.01f;
         }
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u/%u (%.1fm)",
-                        _current_idx + 1, _wp_count, (double)alt_m);
+        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u/%u (%.1fm)",
+        //                 _current_idx + 1, _wp_count , (double)alt_m);
     } else {
         gcs().send_text(MAV_SEVERITY_INFO,
             "Rescue: all %u WPs done, no target → dynamic landing", _wp_count);
@@ -531,7 +569,7 @@ void ModeRescue::advance_to_next_wp()
 
 void ModeRescue::notify_wp_reached(uint8_t idx)
 {
-    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u reached", idx + 1);
+    // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u reached", idx + 1);
     for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
         mavlink_msg_user_wp_reached_send(gcs().chan(c)->get_chan(), idx, 1);
     }
@@ -637,12 +675,66 @@ void ModeRescue::handle_target_detected(int16_t dx, int16_t dy)
 
 void ModeRescue::handle_insert_wp(int32_t lat_degE7, int32_t lon_degE7)
 {
+    // ---- Rejection cases ----
+    Location target{};
+    target.lat = lat_degE7;
+    target.lng = lon_degE7;
+    target.alt = copter.current_loc.alt;
+
+    const float dist_m = copter.current_loc.get_distance(target);
     if (_phase != RescuePhase::WP_NAV && _phase != RescuePhase::INSERT_NAV) {
         gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: INSERT_WP ignored — not in WP_NAV phase (current: %u)",
+            "Rescue: INSERT_WP rejected — not in WP_NAV phase (current: %u)",
             (uint8_t)_phase);
+
+        // Notify QGC: rejected, reason=1 (wrong phase)
+        for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+            mavlink_msg_rescue_insert_wp_ack_send(
+                gcs().chan(c)->get_chan(),
+                0,                  // lat (0 = invalid)
+                0,                  // lon (0 = invalid)
+                0,                  // accepted = false
+                1,                  // reason: wrong phase
+                _current_idx + _insert_nav_number        // current WP index for context
+            );
+        }
         return;
     }
+    if (dist_m>1000.0) {
+        gcs().send_text(MAV_SEVERITY_WARNING,
+            "Rescue: INSERT_WP rejected — not in range");
+
+        // Notify QGC: rejected, reason=1 (wrong phase)
+        for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+            mavlink_msg_rescue_insert_wp_ack_send(
+                gcs().chan(c)->get_chan(),
+                0,                  // lat (0 = invalid)
+                0,                  // lon (0 = invalid)
+                0,                  // accepted = false
+                4,                  // reject if out of threshold distance
+                _current_idx + _insert_nav_number       // current WP index for context
+            );
+        }
+        return;
+    }
+
+    if (lat_degE7 == 0 && lon_degE7 == 0) {
+        gcs().send_text(MAV_SEVERITY_WARNING,
+            "Rescue: INSERT_WP rejected — invalid coordinates");
+
+        for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+            mavlink_msg_rescue_insert_wp_ack_send(
+                gcs().chan(c)->get_chan(),
+                0, 0,
+                0,                  // accepted = false
+                2,                  // reason: invalid coords
+                _current_idx + _insert_nav_number
+            );
+        }
+        return;
+    }
+
+    // ---- Accept ----
 
     _inserted_wp.lat          = lat_degE7;
     _inserted_wp.lng          = lon_degE7;
@@ -651,8 +743,25 @@ void ModeRescue::handle_insert_wp(int32_t lat_degE7, int32_t lon_degE7)
     _has_inserted_wp          = true;
 
     gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: WP inserted (%.7f, %.7f), going there next",
-        (double)(lat_degE7 * 1e-7f), (double)(lon_degE7 * 1e-7f));
+        "Rescue: WP inserted (%.7f, %.7f), navigating there next, "
+        "then resuming at pattern Next WP.",
+        (double)(lat_degE7 * 1e-7f),
+        (double)(lon_degE7 * 1e-7f)
+    );
+
+    // ACK to QGC: accepted
+    for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+        mavlink_msg_rescue_insert_wp_ack_send(
+            gcs().chan(c)->get_chan(),
+            lat_degE7,              // echo lat back
+            lon_degE7,              // echo lon back
+            1,                      // accepted = true
+            0,                      // reason: OK
+            _current_idx + _insert_nav_number            // pattern will resume at this index after inserted WP
+        );
+    }
+
+
 }
 
 void ModeRescue::handle_start_search()
