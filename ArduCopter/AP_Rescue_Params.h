@@ -71,9 +71,8 @@ public:
     AP_Int16 life_pwm_ch2;
     AP_Int16 life_pwm_ch3;
 
-    AP_Int16 life_pwm_val1;
-    AP_Int16 life_pwm_val2;
-    AP_Int16 life_pwm_val3;
+    AP_Int16 life_deploy_pwm;
+    AP_Int16 life_retract_pwm;
 
     AP_Int16 life_dep_alt;
     AP_Float hfov;

@@ -1240,45 +1240,53 @@ public:
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method method) const override { return true; }
 
-    // MAVLink handlers
+    // MAVLink handlers — called from GCS_MAVLink_Copter.cpp
     void handle_rescue_wp(uint16_t seq, uint16_t total_count,
                            int32_t lat_degE7, int32_t lon_degE7);
     void handle_target_detected(int16_t dx, int16_t dy);
+    void handle_target_lost();
     void handle_start_search();
-    void handle_deploy_lifebuoy();
+    void handle_lifebuoy(bool deploy);
     void handle_user_wp_reached(uint16_t wp_index, uint8_t reached);
     void handle_insert_wp(int32_t lat_degE7, int32_t lon_degE7);
     void handle_home_beacon_gps(int32_t lat, int32_t lon,
                                  float heading, float v_north, float v_east);
-    void handle_generate_wps(uint16_t length_m);  // NEW
+    void handle_generate_wps(uint16_t length_m);
+    void handle_target_gps(int32_t lat_degE7, int32_t lon_degE7);
 
     bool rescue_wps_complete() const {
         return _wp_count == _expected_count && _wp_count > 0;
     }
     uint8_t rescue_wp_count() const { return _wp_count; }
-    bool beacon_available() const { return _beacon_valid; }
+    bool beacon_available()   const { return _beacon_valid; }
 
 protected:
     const char *name()  const override { return "RESCUE"; }
     const char *name4() const override { return "RESC"; }
 
 private:
-    static constexpr uint8_t  RESCUE_WP_MAX      = 32;
-    static constexpr float    CENTER_PX_SCALE     = 0.01f;
-    static constexpr float    CENTER_ALPHA        = 0.05f;
-    static constexpr uint32_t STATUS_INTERVAL_MS  = 1000;
-    static constexpr uint32_t BEACON_TIMEOUT_MS   = 5000;
+    static constexpr uint8_t  RESCUE_WP_MAX             = 32;
+    static constexpr float    CENTER_PX_SCALE            = 0.01f;
+    static constexpr float    CENTER_ALPHA               = 0.05f;
+    static constexpr uint32_t STATUS_INTERVAL_MS         = 1000;
+    static constexpr uint32_t BEACON_TIMEOUT_MS          = 5000;
+    static constexpr uint8_t  MIN_DETECTIONS_FOR_TRACK   = 10;
+    static constexpr uint32_t HOLD_POINT_WAIT_MS         = 10000;
+    static constexpr uint32_t TARGET_APPROACH_WAIT_MS    = 12000;
+    static constexpr uint32_t DETECTION_WINDOW_MS        = 5000;
 
     enum class RescuePhase : uint8_t {
-        IDLE          = 0,
-        TAKEOFF       = 1,
-        TAKING_OFF    = 2,
-        WP_NAV        = 3,
-        INSERT_NAV    = 4,
-        CENTERING     = 5,
-        DEPLOYING     = 6,
-        GUIDED        = 7,
-        WPS_GENERATED = 8,  // WPs generated internally, echoed to GCS, awaiting START_SEARCH
+        IDLE            = 0,
+        TAKEOFF         = 1,
+        TAKING_OFF      = 2,
+        WP_NAV          = 3,
+        INSERT_NAV      = 4,
+        HOLD_POINT      = 5,
+        TARGET_APPROACH = 6,
+        CENTERING       = 7,
+        DEPLOYING       = 8,
+        GUIDED          = 9,
+        WPS_GENERATED   = 10,
     };
 
     // Waypoints
@@ -1286,67 +1294,78 @@ private:
     uint8_t  _wp_count{0};
     uint16_t _expected_count{0};
     uint8_t  _current_idx{0};
+    uint8_t  _insert_nav_number{0};
     bool     _wpnav_initialised{false};
-    bool     _wps_from_generate{false};  // true if WPs came from GENERATE_WPS
+    bool     _wps_from_generate{false};
 
     // Inserted WP
     Location _inserted_wp{};
     bool     _has_inserted_wp{false};
-    uint16_t _insert_nav_number = 0;
 
-    // State
+    // Phase state
     RescuePhase _phase{RescuePhase::IDLE};
     uint32_t    _mission_start_ms{0};
 
-    // TARGET_PX
+    // Detection / tracking state (mirrors detection.py + navigation.py)
     int16_t  _target_dx{0};
     int16_t  _target_dy{0};
-    bool     _target_px_fresh{false};
+    bool     _target_px_valid{false};
     uint32_t _target_px_last_ms{0};
+    uint32_t _detection_window_start_ms{0};
+    uint8_t  _detection_count{0};
+    bool     _tracking_active{false};
+
+    bool     _first_wp_reached{false};
+
+    uint32_t _hold_point_start_ms{0};
+    Vector3p _hold_point_loc{};
+
+    // Location _target_gps_loc{};
+    // bool     _target_gps_valid{false};
+    uint32_t _target_approach_start_ms{0};
+
     float    _smooth_vx{0.0f};
     float    _smooth_vy{0.0f};
 
-    // Lifebuoy
     bool     _lifebuoy_deployed{false};
     uint32_t _deploy_time_ms{0};
 
-    // Beacon
     bool     _beacon_valid{false};
     uint32_t _beacon_last_ms{0};
     float    _beacon_lat{0.0f};
     float    _beacon_lon{0.0f};
 
-    // Status tx
     uint32_t _last_status_ms{0};
 
-    // Helpers
     void apply_nav_alt(Location &loc) const;
-    bool generate_lawn_pattern(float total_dist_m);  // now takes length as param
-    void echo_wps_to_gcs();                          // NEW: send all WPs to GCS
+    bool generate_lawn_pattern(float total_dist_m);
+    void echo_wps_to_gcs();
+    void send_current_route_to_gcs();
+    bool wp_nav_set_destination(const Location &dest);
+    bool wp_nav_set_destination_insert(const Location &dest);
+    void advance_to_next_wp();
+    void notify_wp_reached(uint8_t idx);
+    void compute_hold_point(Vector3p &hold_loc);
+    void compute_centering_velocity(float &vx_out, float &vy_out);
+    void fire_lifebuoy_servos(bool deploy);
+    void switch_to_dynamic_landing();
+    void send_status();
+    void update_detection_window();
 
     void takeoff_pending_run();
     void taking_off_run();
     void wp_nav_run();
     void insert_nav_run();
+    void hold_point_run();
+    void target_approach_run();
     void centering_run();
     void deploying_run();
-
-    bool wp_nav_set_destination(const Location &dest);
-    bool wp_nav_set_destination_insert(const Location &dest);
-    void advance_to_next_wp();
-    void notify_wp_reached(uint8_t idx);
-    void compute_centering_velocity(float &vx_out, float &vy_out);
-    void fire_lifebuoy_servos();
-    void switch_to_dynamic_landing();
-    void compute_hold_point(const Location &drone_loc,
-                             float v_north, float v_east,
-                             Location &hold_loc) const;
-    void send_status();
 };
 
-// ============================================================
-// ModeDynamicLanding
-// ============================================================
+// ============================================================================
+// Add this class declaration to ArduCopter/mode.h (after ModeRescue)
+// ============================================================================
+
 class ModeDynamicLanding : public ModeGuided {
 public:
     using ModeGuided::Mode;
@@ -1359,10 +1378,9 @@ public:
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method method) const override { return true; }
 
-    // MAVLink handlers
     void handle_home_beacon_gps(int32_t lat, int32_t lon,
                                  float heading, float v_north, float v_east);
-    void handle_aruco_marker(int16_t dx, int16_t dy, float z, uint8_t detected);
+    void handle_aruco_marker(float x_m, float y_m, float z_m, uint8_t detected);
 
 protected:
     const char *name()  const override { return "DYN_LAND"; }
@@ -1370,13 +1388,14 @@ protected:
 
 private:
     static constexpr uint32_t STATUS_INTERVAL_MS = 1000;
-    static constexpr float    MARKER_ALPHA        = 0.8f;
+    static constexpr float    DETECTION_WINDOW_S  = 1.0f;
+    static constexpr uint8_t  DETECTION_WINDOW_MAX = 64;
+    static constexpr uint32_t HOLD_POINT_WAIT_MS         = 10000;
 
     enum class LandPhase : uint8_t {
         GPS_FOLLOW = 0,
-        CENTERING  = 1,
-        DESCENDING = 2,
-        LANDED     = 3,
+        PRECISION  = 1,
+        LANDED     = 2,
     };
     LandPhase _phase{LandPhase::GPS_FOLLOW};
 
@@ -1393,27 +1412,38 @@ private:
     } _beacon;
 
     struct MarkerState {
-        int16_t  dx{0};
-        int16_t  dy{0};
+        float    x{0.0f};
+        float    y{0.0f};
         float    z{0.0f};
         bool     detected{false};
         uint32_t last_detected_ms{0};
-        float    smooth_vx{0.0f};
-        float    smooth_vy{0.0f};
-        float    prev_smooth_vx{0.0f};
-        float    prev_smooth_vy{0.0f};
     } _marker;
 
+    float    _smooth_marker_x{0.0f};
+    float    _smooth_marker_y{0.0f};
+    float    _smooth_marker_z{0.0f};
+    float    _prev_smooth_marker_x{0.0f};
+    float    _prev_smooth_marker_y{0.0f};
+    float    _prev_smooth_marker_z{0.0f};
     float    _smooth_home_vx{0.0f};
     float    _smooth_home_vy{0.0f};
+    uint32_t _marker_last_detected_ms{0};
+    float    _last_vz_command{0.0f};
+
+    uint32_t _detection_window[DETECTION_WINDOW_MAX];
+    uint8_t  _detection_window_head{0};
+    uint8_t  _detection_window_count{0};
+
     uint32_t _last_status_ms{0};
 
     void gps_follow_run();
-    void centering_run();
-    void descending_run();
+    void precision_landing_run();
+    void precision_landing_enter();
 
-    void compute_marker_velocity(float &vx_out, float &vy_out);
     void update_beacon_lookahead();
+    void push_detection_timestamp(uint32_t now_ms);
+    void prune_detection_window(uint32_t now_ms);
+    float compute_detections_per_second(uint32_t now_ms);
     void send_status();
 };
 

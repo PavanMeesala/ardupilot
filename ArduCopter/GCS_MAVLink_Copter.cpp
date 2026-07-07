@@ -1321,16 +1321,6 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         break;
     }
 
-    case MAVLINK_MSG_ID_DEPLOY_LIFEBUOY: {
-        mavlink_deploy_lifebuoy_t pkt;
-        mavlink_msg_deploy_lifebuoy_decode(&msg, &pkt);
-        if (pkt.target_system == mavlink_system.sysid && pkt.deploy == 1
-            && copter.flightmode->in_rescue_mode()) {
-            static_cast<ModeRescue*>(copter.flightmode)->handle_deploy_lifebuoy();
-        }
-        break;
-    }
-
     case MAVLINK_MSG_ID_USER_WP_REACHED: {
         mavlink_user_wp_reached_t pkt;
         mavlink_msg_user_wp_reached_decode(&msg, &pkt);
@@ -1340,11 +1330,35 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         }
         break;
     }
-#endif
 
-    // HOME_BEACON_GPS goes to BOTH modes:
-    // - ModeRescue: pre-flight validity check only
-    // - ModeDynamicLanding: actual nav data
+    case MAVLINK_MSG_ID_GENERATE_WPS: {
+        mavlink_generate_wps_t pkt;
+        mavlink_msg_generate_wps_decode(&msg, &pkt);
+        if (pkt.target_system == mavlink_system.sysid && copter.flightmode->in_rescue_mode()) {
+            static_cast<ModeRescue*>(copter.flightmode)
+                ->handle_generate_wps(pkt.length);
+        }
+        break;
+    }
+    case MAVLINK_MSG_ID_TARGET_PX: {
+        mavlink_target_px_t pkt;
+        mavlink_msg_target_px_decode(&msg, &pkt);
+        if (copter.flightmode->in_rescue_mode()) {
+            // pkt.dx / pkt.dy are int16_t (signed) per updated XML
+            static_cast<ModeRescue*>(copter.flightmode)
+                ->handle_target_detected(pkt.dx, pkt.dy);
+        }
+        break;
+    }
+    case MAVLINK_MSG_ID_LIFEBUOY_CONTROL: {
+        mavlink_lifebuoy_control_t pkt;
+        mavlink_msg_lifebuoy_control_decode(&msg, &pkt);
+        if (pkt.target_system == mavlink_system.sysid && copter.flightmode->in_rescue_mode()) {
+            static_cast<ModeRescue*>(copter.flightmode)->handle_lifebuoy(pkt.deploy);
+        }
+        break;
+    }
+#endif 
     case MAVLINK_MSG_ID_HOME_BEACON_GPS: {
         mavlink_home_beacon_gps_t pkt;
         mavlink_msg_home_beacon_gps_decode(&msg, &pkt);
@@ -1365,38 +1379,13 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         break;
     }
 
-    case MAVLINK_MSG_ID_TARGET_PX: {
-        mavlink_target_px_t pkt;
-        mavlink_msg_target_px_decode(&msg, &pkt);
-#if MODE_RESCUE_ENABLED
-        if (copter.flightmode->in_rescue_mode()) {
-            static_cast<ModeRescue*>(copter.flightmode)
-                ->handle_target_detected((int16_t)pkt.dx, (int16_t)pkt.dy);
-        }
-#endif
-        for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-            mavlink_msg_target_px_send(gcs().chan(c)->get_chan(), pkt.dx, pkt.dy);
-        }
-        break;
-    }
-    case MAVLINK_MSG_ID_GENERATE_WPS: {
-        mavlink_generate_wps_t pkt;
-        mavlink_msg_generate_wps_decode(&msg, &pkt);
-        if (pkt.target_system == mavlink_system.sysid &&
-            pkt.deploy == 1 &&
-            copter.flightmode->in_rescue_mode()) {
-            static_cast<ModeRescue*>(copter.flightmode)
-                ->handle_generate_wps(pkt.length);
-        }
-        break;
-    }
 #if MODE_DYNAMIC_LANDING_ENABLED
     case MAVLINK_MSG_ID_ARUCO_MARKER: {
         mavlink_aruco_marker_t pkt;
         mavlink_msg_aruco_marker_decode(&msg, &pkt);
         if (copter.flightmode->mode_number() == Mode::Number::DYNAMIC_LANDING) {
             static_cast<ModeDynamicLanding*>(copter.flightmode)
-                ->handle_aruco_marker(pkt.dx, pkt.dy, pkt.z, pkt.detected);
+                ->handle_aruco_marker(pkt.x, pkt.y, pkt.z, pkt.detected);
         }
         break;
     }

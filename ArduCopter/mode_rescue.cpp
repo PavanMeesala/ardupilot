@@ -7,23 +7,33 @@
 // ---------------------------------------------------------------------------
 bool ModeRescue::init(bool ignore_checks)
 {
-    _current_idx       = 0;
-    _phase             = RescuePhase::IDLE;
-    _target_px_fresh   = false;
-    _target_px_last_ms = 0;
-    _smooth_vx         = 0.0f;
-    _smooth_vy         = 0.0f;
-    _lifebuoy_deployed = false;
-    _wpnav_initialised = false;
-    _has_inserted_wp   = false;
-    _mission_start_ms  = 0;
-    _wps_from_generate = false;
+    _current_idx                = 0;
+    _phase                      = RescuePhase::IDLE;
+    _wpnav_initialised          = false;
+    _wps_from_generate          = false;
+    _has_inserted_wp            = false;
+    _mission_start_ms           = 0;
+    _target_dx                  = 0;
+    _target_dy                  = 0;
+    _target_px_valid            = false;
+    _target_px_last_ms          = 0;
+    _detection_window_start_ms  = 0;
+    _detection_count            = 0;
+    _tracking_active            = false;
+    _first_wp_reached           = false;
+    _hold_point_start_ms        = 0;
+    // _target_gps_valid           = false;
+    _target_approach_start_ms   = 0;
+    _smooth_vx                  = 0.0f;
+    _smooth_vy                  = 0.0f;
+    _lifebuoy_deployed          = false;
+    _deploy_time_ms             = 0;
 
     if (!ModeGuided::init(ignore_checks)) {
         return false;
     }
 
-    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: ready, awaiting WP upload or GENERATE_WPS");
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: ready");
     return true;
 }
 
@@ -35,21 +45,92 @@ void ModeRescue::run()
     send_status();
 
     switch (_phase) {
-    case RescuePhase::IDLE:          ModeGuided::run();     break;
-    case RescuePhase::WPS_GENERATED: ModeGuided::run();     break;  // hold, wait for START_SEARCH
-    case RescuePhase::TAKEOFF:       takeoff_pending_run(); break;
-    case RescuePhase::TAKING_OFF:    taking_off_run();      break;
-    case RescuePhase::WP_NAV:        wp_nav_run();          break;
-    case RescuePhase::INSERT_NAV:    insert_nav_run();      break;
-    case RescuePhase::CENTERING:     centering_run();       break;
-    case RescuePhase::DEPLOYING:     deploying_run();       break;
-    case RescuePhase::GUIDED:        ModeGuided::run();     break;
+    case RescuePhase::IDLE:            ModeGuided::run();       break;
+    case RescuePhase::WPS_GENERATED:   ModeGuided::run();       break;
+    case RescuePhase::TAKEOFF:         takeoff_pending_run();   break;
+    case RescuePhase::TAKING_OFF:      taking_off_run();        break;
+    case RescuePhase::WP_NAV:          wp_nav_run();            break;
+    case RescuePhase::INSERT_NAV:      insert_nav_run();        break;
+    case RescuePhase::HOLD_POINT:      hold_point_run();        break;
+    case RescuePhase::TARGET_APPROACH: target_approach_run();   break;
+    case RescuePhase::CENTERING:       centering_run();         break;
+    case RescuePhase::DEPLOYING:       deploying_run();         break;
+    case RescuePhase::GUIDED:          ModeGuided::run();       break;
     }
 }
 
+void ModeRescue::update_detection_window()
+{
+    const uint32_t now = AP_HAL::millis();
+
+    if (now - _detection_window_start_ms > DETECTION_WINDOW_MS) {
+        _detection_count           = 0;
+        _detection_window_start_ms = now;
+    }
+
+    _detection_count++;
+
+    const bool enough = (_detection_count >= MIN_DETECTIONS_FOR_TRACK);
+    const bool recent = (now - _target_px_last_ms < 3000);
+    _tracking_active  = enough && recent;
+}
+
 // ---------------------------------------------------------------------------
-// apply_nav_alt — set RSC_NAV_ALT as ABOVE_HOME if location has no altitude
-// nav_alt is AP_Float
+// handle_target_detected
+// ---------------------------------------------------------------------------
+void ModeRescue::handle_target_detected(int16_t dx, int16_t dy)
+{
+    _target_dx         = dx;
+    _target_dy         = dy;
+    _target_px_valid   = true;
+    _target_px_last_ms = AP_HAL::millis();
+
+    update_detection_window();
+}
+// ---------------------------------------------------------------------------
+// compute_hold_point — port of navigation.py go_to_hold_point()
+// ---------------------------------------------------------------------------
+void ModeRescue::compute_hold_point(Vector3p &hold_loc) 
+{
+    float yaw_rad = 0.0f;
+    bool yaw_relative = false;
+    float yaw_rate_rads = 0.0f; 
+    bool yaw_ignore = true;
+    bool yaw_rate_ignore = true;
+    Vector3f vel; 
+    if (!copter.ahrs.get_velocity_NED(vel)) { 
+        // Velocity unavailable 
+        return; } 
+    const float v_north = vel.x; 
+    const float v_east = vel.y;
+    const float v       = sqrtf(v_north * v_north + v_east * v_east);
+
+    if (v < 0.3f) {
+        hold_loc = Vector3p(0.0f, 0.0f, 0.0f);
+        copter.mode_guided.set_pos_NEU_m(hold_loc, !yaw_ignore, yaw_rad, !yaw_rate_ignore, yaw_rate_rads, yaw_relative, false);
+        return;
+    }
+
+    float d = (v * v) / (2.0f * (float)g2.rescue.stop_acc) + v * 0.2f;
+    d = MIN(d, (float)(int16_t)g2.rescue.max_stop_dis);
+
+    const float dir_n    = v_north / v;
+    const float dir_e    = v_east  / v;
+
+    hold_loc = Vector3p(dir_n * d, dir_e * d, 0.0f);
+    if (!AP::ahrs().get_relative_position_NED_origin(hold_loc)) {
+        // need position estimate to calculate target position
+        copter.mode_guided.init(true);
+        return;
+    }
+    hold_loc.xy() += hold_loc.xy();
+    hold_loc.z -= hold_loc.z;
+    
+    copter.mode_guided.set_pos_NEU_m(hold_loc, !yaw_ignore, yaw_rad, !yaw_rate_ignore, yaw_rate_rads, yaw_relative, false);
+}
+
+// ---------------------------------------------------------------------------
+// apply_nav_alt
 // ---------------------------------------------------------------------------
 void ModeRescue::apply_nav_alt(Location &loc) const
 {
@@ -59,96 +140,57 @@ void ModeRescue::apply_nav_alt(Location &loc) const
 }
 
 // ---------------------------------------------------------------------------
-// generate_lawn_pattern
-// Now takes total_dist_m as a parameter (from GENERATE_WPS.length or default).
-// Uses: RSC_NAV_ALT (AP_Float), RSC_GMB_HFOV (AP_Float)
-// Mirrors OBC's generate_lawn_waypoints_lat_long()
+// generate_lawn_pattern — expanding conical pattern aligned to heading
 // ---------------------------------------------------------------------------
 bool ModeRescue::generate_lawn_pattern(float total_dist_m)
 {
     const float alt_m    = (float)g2.rescue.nav_alt;
     const float hfov_rad = radians((float)g2.rescue.gmb_hfov);
     const float overlap  = 0.2f;
+    const float strip_w  = 2.0f * alt_m * tanf(hfov_rad * 0.5f) * (1.0f - overlap);
 
-    const float ground_w = 2.0f * alt_m * tanf(hfov_rad * 0.5f) * (1.0f - overlap);
-
-    if (ground_w < 0.5f) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: strip width %.2fm too small, check RSC_NAV_ALT/RSC_GMB_HFOV",
-            (double)ground_w);
+    if (strip_w < 0.5f || total_dist_m < 10.0f) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: pattern params invalid");
         return false;
     }
 
-    if (total_dist_m < 10.0f) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: search length %.0fm too small", (double)total_dist_m);
-        return false;
-    }
-
-    const int n_pairs = MAX(1, (int)(total_dist_m / ground_w));
-
+    const int   n_pairs   = MAX(1, (int)(total_dist_m / strip_w));
     const float start_lat = copter.current_loc.lat * 1e-7f;
     const float start_lon = copter.current_loc.lng * 1e-7f;
-    const float hdg_deg   = copter.ahrs.yaw_sensor * 0.01f;
-    const float hdg_rad   = radians(hdg_deg);
-
-    const float fwd_n    =  cosf(hdg_rad);
-    const float fwd_e    =  sinf(hdg_rad);
-    const float lshift_n =  fwd_e;
-    const float lshift_e = -fwd_n;
-
-    const float max_half_width = total_dist_m * 0.5f;
-
-    const float R        = 6378137.0f;
-    const float lat0_rad = radians(start_lat);
+    const float hdg_rad   = radians(copter.ahrs.yaw_sensor * 0.01f);
+    const float fwd_n     = cosf(hdg_rad);
+    const float fwd_e     = sinf(hdg_rad);
+    const float lshift_n  = fwd_e;
+    const float lshift_e  = -fwd_n;
+    const float max_hw    = total_dist_m * 0.5f;
+    const float R         = 6378137.0f;
+    const float lat0_rad  = radians(start_lat);
 
     auto ne_to_loc = [&](float north_m, float east_m) -> Location {
         Location loc{};
-        loc.lat          = (int32_t)((start_lat + degrees(north_m / R)) * 1e7f);
-        loc.lng          = (int32_t)((start_lon +
-                            degrees(east_m / (R * cosf(lat0_rad)))) * 1e7f);
-        loc.alt          = 0;
+        loc.lat = (int32_t)((start_lat + degrees(north_m / R)) * 1e7f);
+        loc.lng = (int32_t)((start_lon +
+                   degrees(east_m / (R * cosf(lat0_rad)))) * 1e7f);
+        loc.alt = 0;
         loc.relative_alt = false;
         return loc;
     };
 
-    _wp_count       = 0;
-    _expected_count = 0;
+    _wp_count = _expected_count = 0;
 
     for (int k = 0; k < n_pairs && _wp_count < (int)RESCUE_WP_MAX - 1; k++) {
-
-        // frac goes 0→1 as k goes 0→last
-        const float frac = (n_pairs > 1) ? (float)k / (float)(n_pairs - 1) : 0.5f;
-
-        // Forward distance: k=0 → near drone (fwd_dist small)
-        //                   k=last → far end (fwd_dist = total_dist_m)
-        // This makes drone fly AWAY from itself, expanding as it goes
+        const float frac     = (n_pairs > 1) ? (float)k / (float)(n_pairs - 1) : 0.5f;
         const float fwd_dist = total_dist_m * frac;
-
-        // Half-width: small near drone (frac=0), large at far end (frac=1)
-        const float half_w = max_half_width * frac;
-
-        // Centre of cross-strip
-        const float ctr_n = fwd_dist * fwd_n;
-        const float ctr_e = fwd_dist * fwd_e;
-
-        // Left and right endpoints of cross-strip
-        const float left_n  = ctr_n + half_w * lshift_n;
-        const float left_e  = ctr_e + half_w * lshift_e;
-        const float right_n = ctr_n - half_w * lshift_n;
-        const float right_e = ctr_e - half_w * lshift_e;
-
-        Location left_wp  = ne_to_loc(left_n,  left_e);
-        Location right_wp = ne_to_loc(right_n, right_e);
-
-        // Snake pattern: alternate direction each strip
+        const float half_w   = max_hw * frac;
+        const float ctr_n    = fwd_dist * fwd_n;
+        const float ctr_e    = fwd_dist * fwd_e;
+        Location left_wp  = ne_to_loc(ctr_n + half_w * lshift_n, ctr_e + half_w * lshift_e);
+        Location right_wp = ne_to_loc(ctr_n - half_w * lshift_n, ctr_e - half_w * lshift_e);
         if (k % 2 == 0) {
-            // Even: right → left
             _waypoints[_wp_count++] = right_wp;
             if (_wp_count >= RESCUE_WP_MAX) break;
             _waypoints[_wp_count++] = left_wp;
         } else {
-            // Odd: left → right (continue from previous left)
             _waypoints[_wp_count++] = left_wp;
             if (_wp_count >= RESCUE_WP_MAX) break;
             _waypoints[_wp_count++] = right_wp;
@@ -156,44 +198,47 @@ bool ModeRescue::generate_lawn_pattern(float total_dist_m)
     }
 
     _expected_count = _wp_count;
-
     gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: %u WPs, %d strips, hdg=%.0f° len=%.0fm strip=%.1fm",
-        _wp_count, n_pairs,
-        (double)hdg_deg, (double)total_dist_m, (double)ground_w);
-
+        "Rescue: %u WPs, hdg=%.0f deg, len=%.0fm", _wp_count,
+        (double)(copter.ahrs.yaw_sensor * 0.01f), (double)total_dist_m);
     return _wp_count > 0;
 }
 
-// ---------------------------------------------------------------------------
-// echo_wps_to_gcs
-// Sends all generated/loaded waypoints back to all GCS channels via RESCUE_WP.
-// QGC receives these, displays them, then sends START_SEARCH to confirm.
-// ---------------------------------------------------------------------------
 void ModeRescue::echo_wps_to_gcs()
 {
     for (uint8_t i = 0; i < _wp_count; i++) {
         for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-            mavlink_msg_rescue_wp_send(
-                gcs().chan(c)->get_chan(),
-                _wp_count,       // total_count
-                i,               // seq
-                _waypoints[i].lat,
-                _waypoints[i].lng
-            );
+            mavlink_msg_rescue_wp_send(gcs().chan(c)->get_chan(),
+                _wp_count, i, _waypoints[i].lat, _waypoints[i].lng);
         }
-        // Small delay between burst sends to avoid flooding the link
-        // (runs in the main loop context so we can't sleep — just send all at once;
-        // the mavlink library buffers them)
     }
-
     gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: sent %u WPs to GCS — send START_SEARCH to begin mission", _wp_count);
+        "Rescue: sent %u WPs to GCS, awaiting START_SEARCH", _wp_count);
 }
 
-// ---------------------------------------------------------------------------
-// wp_nav_set_destination — init wp_nav ONCE (Auto-style), then just set dest
-// ---------------------------------------------------------------------------
+// void ModeRescue::send_current_route_to_gcs()
+// {
+//     const uint8_t remaining = (_current_idx < _wp_count) ? (_wp_count - _current_idx) : 0;
+//     const uint8_t inserted  = _has_inserted_wp ? 1 : 0;
+//     const uint8_t total     = inserted + remaining;
+//     if (total == 0) return;
+
+//     uint8_t seq = 0;
+//     if (_has_inserted_wp) {
+//         for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+//             mavlink_msg_rescue_wp_send(gcs().chan(c)->get_chan(),
+//                 total, seq, _inserted_wp.lat, _inserted_wp.lng);
+//         }
+//         seq++;
+//     }
+//     for (uint8_t i = _current_idx; i < _wp_count; i++, seq++) {
+//         for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+//             mavlink_msg_rescue_wp_send(gcs().chan(c)->get_chan(),
+//                 total, seq, _waypoints[i].lat, _waypoints[i].lng);
+//         }
+//     }
+// }
+
 bool ModeRescue::wp_nav_set_destination(const Location &dest)
 {
     if (!_wpnav_initialised) {
@@ -211,7 +256,6 @@ bool ModeRescue::wp_nav_set_destination(const Location &dest)
         }
         _wpnav_initialised = true;
     }
-
     if (!wp_nav->set_wp_destination_loc(dest)) {
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: failed to set WP destination");
         return false;
@@ -235,46 +279,32 @@ bool ModeRescue::wp_nav_set_destination_insert(const Location &dest)
 // ---------------------------------------------------------------------------
 void ModeRescue::takeoff_pending_run()
 {
-    if (!motors->armed()) {
-        return;
-    }
-
+    if (!motors->armed()) return;
     if (!do_user_takeoff_start_m((float)g2.rescue.nav_alt)) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: takeoff start failed, retrying");
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: takeoff start failed");
         return;
     }
-
     copter.set_auto_armed(true);
     gcs().send_text(MAV_SEVERITY_INFO, "Rescue: taking off to %.1fm",
                     (double)(float)g2.rescue.nav_alt);
     _phase = RescuePhase::TAKING_OFF;
 }
 
-// ---------------------------------------------------------------------------
-// TAKING_OFF
-// ---------------------------------------------------------------------------
 void ModeRescue::taking_off_run()
 {
     ModeGuided::run();
-
     if (!is_taking_off() && takeoff_complete) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: takeoff complete, starting search");
         _phase = RescuePhase::WP_NAV;
-
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
-
         if (!wp_nav_set_destination(dest)) {
             set_destination(copter.current_loc);
             return;
         }
-
         float alt_m = 0.0f;
-        if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) {
-            alt_m = dest.alt * 0.01f;
-        }
-        gcs().send_text(MAV_SEVERITY_INFO,
-            "Rescue: WP 1/%u (%.1fm)", _wp_count, (double)alt_m);
+        if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) alt_m = dest.alt * 0.01f;
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP 1/%u (%.1fm)", _wp_count, (double)alt_m);
     }
 }
 
@@ -283,12 +313,18 @@ void ModeRescue::taking_off_run()
 // ---------------------------------------------------------------------------
 void ModeRescue::wp_nav_run()
 {
-    if (_target_px_fresh) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target detected → CENTERING");
-        _phase = RescuePhase::CENTERING;
-        _smooth_vx = 0.0f;
-        _smooth_vy = 0.0f;
-        velaccel_control_start();
+    if (_tracking_active &&
+        AP_HAL::millis() - _target_px_last_ms >
+        (uint32_t)(g2.rescue.track_timeout * 1000.0f)) {
+        _tracking_active = false;
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target lost, resuming WP nav");
+    }
+
+    if (_first_wp_reached && _tracking_active) {
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target locked, going to hold point");
+        compute_hold_point(_hold_point_loc);
+        _hold_point_start_ms = AP_HAL::millis();
+        _phase = RescuePhase::HOLD_POINT;
         return;
     }
 
@@ -297,19 +333,17 @@ void ModeRescue::wp_nav_run()
         Location dest = _inserted_wp;
         apply_nav_alt(dest);
         if (wp_nav_set_destination_insert(dest)) {
-            gcs().send_text(MAV_SEVERITY_INFO,
-                "Rescue: navigating to inserted WP (%.7f, %.7f)",
-                (double)(dest.lat * 1e-7f), (double)(dest.lng * 1e-7f));
+            gcs().send_text(MAV_SEVERITY_INFO, "Rescue: navigating to inserted WP");
             _phase = RescuePhase::INSERT_NAV;
+            // send_current_route_to_gcs();
         }
         return;
     }
 
-    // miss_timeout is AP_Int32
     if (_mission_start_ms > 0 &&
         AP_HAL::millis() - _mission_start_ms >
         (uint32_t)((int32_t)g2.rescue.miss_timeout * 1000)) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: mission timeout → dynamic landing");
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: mission timeout");
         switch_to_dynamic_landing();
         return;
     }
@@ -327,6 +361,11 @@ void ModeRescue::wp_nav_run()
 
     if (wp_nav->reached_wp_destination()) {
         notify_wp_reached(_current_idx + _insert_nav_number);
+        if (!_first_wp_reached) {
+            _first_wp_reached = true;
+            gcs().send_text(MAV_SEVERITY_INFO,
+                "Rescue: first WP reached, detection/tracking enabled");
+        }
         advance_to_next_wp();
     }
 }
@@ -336,12 +375,17 @@ void ModeRescue::wp_nav_run()
 // ---------------------------------------------------------------------------
 void ModeRescue::insert_nav_run()
 {
-    if (_target_px_fresh) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target during insert nav → CENTERING");
-        _phase = RescuePhase::CENTERING;
-        _smooth_vx = 0.0f;
-        _smooth_vy = 0.0f;
-        velaccel_control_start();
+    if (_tracking_active &&
+        AP_HAL::millis() - _target_px_last_ms >
+        (uint32_t)(g2.rescue.track_timeout * 1000.0f)) {
+        _tracking_active = false;
+    }
+
+    if (_first_wp_reached && _tracking_active) {
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target during insert nav, hold point");
+        compute_hold_point(_hold_point_loc);
+        _hold_point_start_ms = AP_HAL::millis();
+        _phase = RescuePhase::HOLD_POINT;
         return;
     }
 
@@ -358,10 +402,61 @@ void ModeRescue::insert_nav_run()
 
     if (wp_nav->reached_wp_destination()) {
         gcs().send_text(MAV_SEVERITY_INFO,
-            "Rescue: inserted WP reached, resuming pattern at WP %u/%u",
+            "Rescue: inserted WP reached, resuming at WP %u/%u",
             _current_idx + 1, _wp_count);
-        notify_wp_reached(_current_idx+_insert_nav_number);
+        notify_wp_reached(_current_idx + _insert_nav_number);
         _insert_nav_number++;
+        _phase = RescuePhase::WP_NAV;
+        Location dest = _waypoints[_current_idx];
+        apply_nav_alt(dest);
+        wp_nav_set_destination_insert(dest);
+        // send_current_route_to_gcs();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HOLD_POINT
+// ---------------------------------------------------------------------------
+void ModeRescue::hold_point_run()
+{
+    if (is_disarmed_or_landed()) {
+        make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
+        return;
+    }
+
+    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+    copter.failsafe_terrain_set_status(wp_nav->update_wpnav());
+    pos_control->update_U_controller();
+    attitude_control->input_thrust_vector_heading(
+        pos_control->get_thrust_vector(), auto_yaw.get_heading());
+
+    const uint32_t now    = AP_HAL::millis();
+    const uint32_t waited = now - _hold_point_start_ms;
+
+    const bool target_locked = _target_px_valid && ((sq((float)_target_dx) + sq((float)_target_dy)) < 900.0f);
+
+    if (target_locked) {
+        gcs().send_text(MAV_SEVERITY_INFO,
+            "Rescue: target locked (dx=%d dy=%d), target approach",
+            (int)_target_dx, (int)_target_dy);
+        _phase = RescuePhase::TARGET_APPROACH;
+        _target_approach_start_ms = now;
+
+        // if (_target_gps_valid) {
+        //     Location dest = _target_gps_loc;
+        //     apply_nav_alt(dest);
+        //     wp_nav_set_destination_insert(dest);
+        //     gcs().send_text(MAV_SEVERITY_INFO, "Rescue: flying to target GPS position");
+        // }
+        return;
+    }
+
+    if (waited >= HOLD_POINT_WAIT_MS) {
+        gcs().send_text(MAV_SEVERITY_INFO,
+            "Rescue: hold timeout, resuming pattern at WP %u/%u",
+            _current_idx + 1, _wp_count);
+        _tracking_active = false;
+        _detection_count = 0;
         _phase = RescuePhase::WP_NAV;
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
@@ -370,8 +465,38 @@ void ModeRescue::insert_nav_run()
 }
 
 // ---------------------------------------------------------------------------
+// TARGET_APPROACH
+// ---------------------------------------------------------------------------
+void ModeRescue::target_approach_run()
+{
+    if (is_disarmed_or_landed()) {
+        make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
+        return;
+    }
+
+    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+
+    const uint32_t now     = AP_HAL::millis();
+    const uint32_t elapsed = now - _target_approach_start_ms;
+
+    // if (_target_gps_valid) {
+    //     copter.failsafe_terrain_set_status(wp_nav->update_wpnav());
+    // }
+    // pos_control->update_U_controller();
+    // attitude_control->input_thrust_vector_heading(
+    //     pos_control->get_thrust_vector(), auto_yaw.get_heading());
+
+    if (elapsed >= TARGET_APPROACH_WAIT_MS) {
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: approach wait done, centering");
+        _smooth_vx = 0.0f;
+        _smooth_vy = 0.0f;
+        velaccel_control_start();
+        _phase = RescuePhase::CENTERING;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CENTERING
-// Uses: RSC_LIFE_ALT (life_dep_alt AP_Int16)
 // ---------------------------------------------------------------------------
 void ModeRescue::centering_run()
 {
@@ -382,48 +507,38 @@ void ModeRescue::centering_run()
 
     motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
 
-    const uint32_t now_ms = AP_HAL::millis();
-    const bool px_valid   = _target_px_fresh &&
-                            (now_ms - _target_px_last_ms < 3000);
-
+    const uint32_t now = AP_HAL::millis();
     float vx = 0.0f;
     float vy = 0.0f;
 
-    if (px_valid) {
+    if (_target_px_valid) {
         compute_centering_velocity(vx, vy);
-        _target_px_fresh = false;
     } else {
-        _smooth_vx *= 0.95f;
-        _smooth_vy *= 0.95f;
-        vx = constrain_float(_smooth_vx, -1.5f, 1.5f);
-        vy = constrain_float(_smooth_vy, -1.5f, 1.5f);
+        vx = 0.0f;
+        vy = 0.0f;
     }
 
     const float vz_down = 0.3f;
-    const float hdg_rad = radians(copter.ahrs.yaw_sensor * 0.01f);
-    const Vector3f vel_neu{
-         vx * cosf(hdg_rad) - vy * sinf(hdg_rad),
-         vx * sinf(hdg_rad) + vy * cosf(hdg_rad),
-        -vz_down
-    };
-
-    set_vel_NEU_ms(vel_neu);
+    Vector3f vel_body{vx, vy, -vz_down};
+    vel_body.xy() = copter.ahrs.body_to_earth2D(vel_body.xy());
+    Vector3f accel_neu_mss;
+    float yaw_rad = 0.0f;
+    bool yaw_relative = false;
+    float yaw_rate_rads = 0.0f; 
+    bool yaw_ignore = true;
+    bool yaw_rate_ignore = true;
+    set_vel_accel_NEU_m(vel_body, accel_neu_mss, !yaw_ignore, yaw_rad, !yaw_rate_ignore, yaw_rate_rads, yaw_relative);
     ModeGuided::run();
 
-    float check_alt;
-    if (copter.rangefinder_alt_ok()) {
-        check_alt = copter.rangefinder_state.alt_m_filt.get();
-    } else {
-        check_alt = (copter.current_loc.alt - copter.ahrs.get_home().alt) * 0.01f;
-    }
+    const float rel_alt = (copter.current_loc.alt -
+                            copter.ahrs.get_home().alt) * 0.01f;
 
-    // life_dep_alt is AP_Int16
-    if (check_alt <= (float)(int16_t)g2.rescue.life_dep_alt && !_lifebuoy_deployed) {
-        fire_lifebuoy_servos();
+    if (rel_alt < (float)(int16_t)g2.rescue.life_dep_alt && !_lifebuoy_deployed) {
+        fire_lifebuoy_servos(1);
         _lifebuoy_deployed = true;
-        _deploy_time_ms    = now_ms;
+        _deploy_time_ms    = now;
         gcs().send_text(MAV_SEVERITY_INFO,
-            "Rescue: lifebuoy deployed at %.1fm", (double)check_alt);
+            "Rescue: lifebuoy deployed at rel_alt=%.1fm", (double)rel_alt);
         _phase = RescuePhase::DEPLOYING;
     }
 }
@@ -433,17 +548,13 @@ void ModeRescue::centering_run()
 // ---------------------------------------------------------------------------
 void ModeRescue::compute_centering_velocity(float &vx_out, float &vy_out)
 {
-    float alt_m;
-    if (copter.rangefinder_alt_ok()) {
-        alt_m = copter.rangefinder_state.alt_m_filt.get();
-    } else {
-        alt_m = (copter.current_loc.alt - copter.ahrs.get_home().alt) * 0.01f;
-    }
-    alt_m = MAX(alt_m, 3.0f);
+    const float rel_alt = (copter.current_loc.alt -
+                            copter.ahrs.get_home().alt) * 0.01f;
+    const float altitude  = MAX(rel_alt, 3.0f);
+    const float alt_scale = altitude / 30.0f;
 
-    const float alt_scale = alt_m / 30.0f;
-    const float raw_vx    = -CENTER_PX_SCALE * (float)_target_dy * alt_scale;
-    const float raw_vy    =  CENTER_PX_SCALE * (float)_target_dx * alt_scale;
+    const float raw_vx = -CENTER_PX_SCALE * (float)_target_dy * alt_scale;
+    const float raw_vy =  CENTER_PX_SCALE * (float)_target_dx * alt_scale;
 
     _smooth_vx = CENTER_ALPHA * raw_vx + (1.0f - CENTER_ALPHA) * _smooth_vx;
     _smooth_vy = CENTER_ALPHA * raw_vy + (1.0f - CENTER_ALPHA) * _smooth_vy;
@@ -458,118 +569,68 @@ void ModeRescue::compute_centering_velocity(float &vx_out, float &vy_out)
 void ModeRescue::deploying_run()
 {
     ModeGuided::run();
-
     if (AP_HAL::millis() - _deploy_time_ms > 5000) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: deploy hold done → dynamic landing");
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: deploy done, dynamic landing");
         switch_to_dynamic_landing();
     }
 }
 
-// ---------------------------------------------------------------------------
-// switch_to_dynamic_landing
-// ---------------------------------------------------------------------------
 void ModeRescue::switch_to_dynamic_landing()
 {
     if (!copter.set_mode(Mode::Number::DYNAMIC_LANDING, ModeReason::MISSION_END)) {
         gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: failed to switch to DYNAMIC_LANDING, entering GUIDED");
+            "Rescue: failed to switch mode, entering GUIDED");
         _phase = RescuePhase::GUIDED;
         velaccel_control_start();
     }
 }
 
-// ---------------------------------------------------------------------------
-// fire_lifebuoy_servos
-// life_pwm_ch1/2/3 are AP_Int16 → (uint8_t)(int16_t) for channel number
-// life_pwm_val1/2/3 are AP_Int16 → (uint16_t)(int16_t) for PWM value
-// ---------------------------------------------------------------------------
-void ModeRescue::fire_lifebuoy_servos()
+void ModeRescue::fire_lifebuoy_servos(bool deploy)
 {
     const uint8_t ch[3] = {
         (uint8_t)(int16_t)g2.rescue.life_pwm_ch1,
         (uint8_t)(int16_t)g2.rescue.life_pwm_ch2,
         (uint8_t)(int16_t)g2.rescue.life_pwm_ch3
     };
-    const uint16_t val[3] = {
-        (uint16_t)(int16_t)g2.rescue.life_pwm_val1,
-        (uint16_t)(int16_t)g2.rescue.life_pwm_val2,
-        (uint16_t)(int16_t)g2.rescue.life_pwm_val3
-    };
-
-    for (uint8_t i = 0; i < 3; i++) {
-        SRV_Channels::set_output_pwm_chan_timeout(ch[i] - 1, val[i], 10000);
+    int pwm = 0;
+    if (deploy) {
+        pwm = g2.rescue.life_deploy_pwm;
+    } else {
+        pwm = g2.rescue.life_retract_pwm;
     }
-
+    for (uint8_t i = 0; i < 3; i++) {
+        SRV_Channels::set_output_pwm_chan_timeout(ch[i] - 1, pwm, 10000);
+    }
     gcs().send_text(MAV_SEVERITY_INFO,
         "Rescue: servos ch%u=%u ch%u=%u ch%u=%u",
-        ch[0], val[0], ch[1], val[1], ch[2], val[2]);
+        ch[0], pwm, ch[1], pwm, ch[2], pwm);
 }
 
-// ---------------------------------------------------------------------------
-// compute_hold_point
-// Uses: RSC_STOP_ACC (AP_Float), RSC_MAX_STOP_DIS (AP_Int16)
-// Mirrors OBC's go_to_hold_point()
-// ---------------------------------------------------------------------------
-void ModeRescue::compute_hold_point(const Location &drone_loc,
-                                     float v_north, float v_east,
-                                     Location &hold_loc) const
-{
-    const float v = sqrtf(v_north * v_north + v_east * v_east);
-
-    if (v < 0.3f) {
-        hold_loc = drone_loc;
-        return;
-    }
-
-    // stop_acc is AP_Float, max_stop_dis is AP_Int16
-    float d = (v * v) / (2.0f * (float)g2.rescue.stop_acc) + v * 0.2f;
-    d = MIN(d, (float)(int16_t)g2.rescue.max_stop_dis);
-
-    const float dir_n    = v_north / v;
-    const float dir_e    = v_east  / v;
-    const float R        = 6378137.0f;
-    const float lat0_rad = radians(drone_loc.lat * 1e-7f);
-
-    hold_loc.lat = drone_loc.lat +
-                   (int32_t)(degrees(dir_n * d / R) * 1e7f);
-    hold_loc.lng = drone_loc.lng +
-                   (int32_t)(degrees(dir_e * d / (R * cosf(lat0_rad))) * 1e7f);
-    hold_loc.set_alt_m((float)g2.rescue.nav_alt, Location::AltFrame::ABOVE_HOME);
-}
-
-// ---------------------------------------------------------------------------
-// advance_to_next_wp
-// ---------------------------------------------------------------------------
 void ModeRescue::advance_to_next_wp()
 {
     if (_current_idx + 1 < _wp_count) {
         _current_idx++;
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
-
         if (!wp_nav_set_destination_insert(dest)) {
-            gcs().send_text(MAV_SEVERITY_WARNING,
-                "Rescue: failed WP %u, holding", _current_idx + 1);
             set_destination(copter.current_loc);
             return;
         }
-
         float alt_m = 0.0f;
-        if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) {
-            alt_m = dest.alt * 0.01f;
-        }
-        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u/%u (%.1fm)",
-        //                 _current_idx + 1, _wp_count , (double)alt_m);
+        if (!dest.get_alt_m(Location::AltFrame::ABOVE_HOME, alt_m)) alt_m = dest.alt * 0.01f;
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u/%u (%.1fm)",
+                        _current_idx + 1, _wp_count, (double)alt_m);
+        // send_current_route_to_gcs();
     } else {
         gcs().send_text(MAV_SEVERITY_INFO,
-            "Rescue: all %u WPs done, no target → dynamic landing", _wp_count);
+            "Rescue: all %u WPs done, dynamic landing", _wp_count);
         switch_to_dynamic_landing();
     }
 }
 
 void ModeRescue::notify_wp_reached(uint8_t idx)
 {
-    // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u reached", idx + 1);
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u reached", idx + 1);
     for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
         mavlink_msg_user_wp_reached_send(gcs().chan(c)->get_chan(), idx, 1);
     }
@@ -578,43 +639,19 @@ void ModeRescue::notify_wp_reached(uint8_t idx)
 // ---------------------------------------------------------------------------
 // MAVLink handlers
 // ---------------------------------------------------------------------------
-
 void ModeRescue::handle_rescue_wp(uint16_t seq, uint16_t total_count,
                                    int32_t lat_degE7, int32_t lon_degE7)
 {
-    // If WPs were generated internally, ignore external uploads
-    // unless we're back in IDLE
-    if (_wps_from_generate && _phase != RescuePhase::IDLE) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: RESCUE_WP ignored — using internally generated WPs");
-        return;
-    }
-
-    if (seq >= RESCUE_WP_MAX) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "RESCUE_WP: seq %u exceeds max %u", seq, RESCUE_WP_MAX);
-        return;
-    }
-
-    _wps_from_generate = false;
-    _expected_count    = total_count;
-
+    if (_wps_from_generate && _phase != RescuePhase::IDLE) return;
+    if (seq >= RESCUE_WP_MAX) return;
+    _wps_from_generate  = false;
+    _expected_count     = total_count;
     Location wp{};
-    wp.lat          = lat_degE7;
-    wp.lng          = lon_degE7;
-    wp.alt          = 0;
-    wp.relative_alt = false;
+    wp.lat = lat_degE7; wp.lng = lon_degE7; wp.alt = 0; wp.relative_alt = false;
     _waypoints[seq] = wp;
-
-    if (static_cast<uint16_t>(seq + 1) > _wp_count) {
-        _wp_count = seq + 1;
-    }
-
+    if (static_cast<uint16_t>(seq + 1) > _wp_count) _wp_count = seq + 1;
     if (rescue_wps_complete()) {
-        gcs().send_text(MAV_SEVERITY_INFO,
-            "RESCUE_WP: all %u WPs received — send START_SEARCH to begin",
-            _wp_count);
-        // Echo back to GCS to confirm receipt
+        gcs().send_text(MAV_SEVERITY_INFO, "RESCUE_WP: all %u WPs received", _wp_count);
         echo_wps_to_gcs();
         _phase = RescuePhase::WPS_GENERATED;
     }
@@ -622,190 +659,105 @@ void ModeRescue::handle_rescue_wp(uint16_t seq, uint16_t total_count,
 
 void ModeRescue::handle_generate_wps(uint16_t length_m)
 {
-    if (copter.flightmode != this) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: GENERATE_WPS ignored — not in RESCUE mode");
-        return;
-    }
-
-    if (_phase != RescuePhase::IDLE && _phase != RescuePhase::WPS_GENERATED) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: GENERATE_WPS ignored — mission already in progress (phase %u)",
-            (uint8_t)_phase);
-        return;
-    }
-
+    if (copter.flightmode != this) return;
+    if (_phase != RescuePhase::IDLE && _phase != RescuePhase::WPS_GENERATED) return;
     if (copter.current_loc.lat == 0 && copter.current_loc.lng == 0) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: GENERATE_WPS rejected — no GPS fix");
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: no GPS fix");
         return;
     }
-
-    _wp_count          = 0;
-    _expected_count    = 0;
+    _wp_count = _expected_count = 0;
     _wps_from_generate = true;
-
-    const float dist_m = (float)length_m;
-    gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: generating lawn pattern (length=%.0fm)...", (double)dist_m);
-
-    if (!generate_lawn_pattern(dist_m)) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: pattern generation failed");
+    if (!generate_lawn_pattern((float)length_m)) {
         _phase = RescuePhase::IDLE;
         _wps_from_generate = false;
         return;
     }
-
     echo_wps_to_gcs();
-
     _phase = RescuePhase::WPS_GENERATED;
-
-    // Force immediate status send so QGC sees phase = WPS_GENERATED
     _last_status_ms = 0;
     send_status();
 }
-
-void ModeRescue::handle_target_detected(int16_t dx, int16_t dy)
+void ModeRescue::handle_lifebuoy(bool deploy)
 {
-    _target_dx         = dx;
-    _target_dy         = dy;
-    _target_px_fresh   = true;
-    _target_px_last_ms = AP_HAL::millis();
+    if (_lifebuoy_deployed) return;
+    fire_lifebuoy_servos(deploy);
+    _lifebuoy_deployed = true;
+    _deploy_time_ms    = AP_HAL::millis();
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: lifebuoy deployed (manual)");
+    _phase = RescuePhase::DEPLOYING;
 }
-
 void ModeRescue::handle_insert_wp(int32_t lat_degE7, int32_t lon_degE7)
 {
-    // ---- Rejection cases ----
-    Location target{};
-    target.lat = lat_degE7;
-    target.lng = lon_degE7;
-    target.alt = copter.current_loc.alt;
+    bool accepted = true;
+    uint8_t reason = 0;
 
-    const float dist_m = copter.current_loc.get_distance(target);
     if (_phase != RescuePhase::WP_NAV && _phase != RescuePhase::INSERT_NAV) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: INSERT_WP rejected — not in WP_NAV phase (current: %u)",
-            (uint8_t)_phase);
-
-        // Notify QGC: rejected, reason=1 (wrong phase)
-        for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-            mavlink_msg_rescue_insert_wp_ack_send(
-                gcs().chan(c)->get_chan(),
-                0,                  // lat (0 = invalid)
-                0,                  // lon (0 = invalid)
-                0,                  // accepted = false
-                1,                  // reason: wrong phase
-                _current_idx + _insert_nav_number        // current WP index for context
-            );
-        }
-        return;
+        accepted = false;
+        reason = 1;
+    } else if (lat_degE7 == 0 && lon_degE7 == 0) {
+        accepted = false;
+        reason = 2;
     }
-    if (dist_m>1000.0) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: INSERT_WP rejected — not in range");
 
-        // Notify QGC: rejected, reason=1 (wrong phase)
+    if (!accepted) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: INSERT_WP rejected (reason=%u)", reason);
         for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-            mavlink_msg_rescue_insert_wp_ack_send(
-                gcs().chan(c)->get_chan(),
-                0,                  // lat (0 = invalid)
-                0,                  // lon (0 = invalid)
-                0,                  // accepted = false
-                4,                  // reject if out of threshold distance
-                _current_idx + _insert_nav_number       // current WP index for context
-            );
+            mavlink_msg_rescue_insert_wp_ack_send(gcs().chan(c)->get_chan(),
+                0, 0, 0, reason, _current_idx + _insert_nav_number);
         }
         return;
     }
 
-    if (lat_degE7 == 0 && lon_degE7 == 0) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: INSERT_WP rejected — invalid coordinates");
+    _inserted_wp.lat = lat_degE7; _inserted_wp.lng = lon_degE7;
+    _inserted_wp.alt = 0; _inserted_wp.relative_alt = false;
+    _has_inserted_wp = true;
 
-        for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-            mavlink_msg_rescue_insert_wp_ack_send(
-                gcs().chan(c)->get_chan(),
-                0, 0,
-                0,                  // accepted = false
-                2,                  // reason: invalid coords
-                _current_idx + _insert_nav_number
-            );
-        }
-        return;
-    }
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP inserted (%.7f, %.7f)",
+        (double)(lat_degE7*1e-7f), (double)(lon_degE7*1e-7f));
 
-    // ---- Accept ----
-
-    _inserted_wp.lat          = lat_degE7;
-    _inserted_wp.lng          = lon_degE7;
-    _inserted_wp.alt          = 0;
-    _inserted_wp.relative_alt = false;
-    _has_inserted_wp          = true;
-
-    gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: WP inserted (%.7f, %.7f), navigating there next, "
-        "then resuming at pattern Next WP.",
-        (double)(lat_degE7 * 1e-7f),
-        (double)(lon_degE7 * 1e-7f)
-    );
-
-    // ACK to QGC: accepted
     for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-        mavlink_msg_rescue_insert_wp_ack_send(
-            gcs().chan(c)->get_chan(),
-            lat_degE7,              // echo lat back
-            lon_degE7,              // echo lon back
-            1,                      // accepted = true
-            0,                      // reason: OK
-            _current_idx + _insert_nav_number            // pattern will resume at this index after inserted WP
-        );
+        mavlink_msg_rescue_insert_wp_ack_send(gcs().chan(c)->get_chan(),
+            lat_degE7, lon_degE7, 1, 0, _current_idx + _insert_nav_number);
     }
 
-
+    // send_current_route_to_gcs();
 }
 
 void ModeRescue::handle_start_search()
 {
     if (copter.flightmode != this) return;
-
-    // Must be in IDLE or WPS_GENERATED to start
-    if (_phase != RescuePhase::IDLE && _phase != RescuePhase::WPS_GENERATED) {
-        // Silently absorb GCS retries during active mission
-        return;
-    }
-
-    // Must have waypoints ready
+    if (_phase != RescuePhase::IDLE && _phase != RescuePhase::WPS_GENERATED) return;
     if (_wp_count == 0) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: START_SEARCH rejected — no WPs loaded. "
-            "Send GENERATE_WPS or upload via RESCUE_WP first.");
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: no WPs loaded");
         return;
     }
-
-    // Beacon pre-check
     if (!_beacon_valid ||
         (AP_HAL::millis() - _beacon_last_ms > BEACON_TIMEOUT_MS)) {
-        gcs().send_text(MAV_SEVERITY_WARNING,
-            "Rescue: START_SEARCH rejected — HOME_BEACON_GPS not received. "
-            "OBC must forward beacon before mission start.");
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: no beacon GPS, cannot start");
         return;
     }
 
-    _current_idx       = 0;
-    _target_px_fresh   = false;
-    _lifebuoy_deployed = false;
-    _wpnav_initialised = false;
-    _has_inserted_wp   = false;
-    _mission_start_ms  = AP_HAL::millis();
+    _current_idx                = 0;
+    _tracking_active            = false;
+    _target_px_valid            = false;
+    _target_px_last_ms          = 0;
+    _detection_count            = 0;
+    _detection_window_start_ms  = 0;
+    _first_wp_reached           = false;
+    _smooth_vx                  = 0.0f;
+    _smooth_vy                  = 0.0f;
+    _lifebuoy_deployed          = false;
+    _wpnav_initialised          = false;
+    _has_inserted_wp             = false;
+    _mission_start_ms           = AP_HAL::millis();
 
     if (copter.ap.land_complete) {
         gcs().send_text(MAV_SEVERITY_INFO,
-            "Rescue: confirmed — taking off to %.1fm when armed (%u WPs ready)",
-            (double)(float)g2.rescue.nav_alt, _wp_count);
+            "Rescue: queued, taking off to %.1fm when armed",
+            (double)(float)g2.rescue.nav_alt);
         _phase = RescuePhase::TAKEOFF;
     } else {
-        gcs().send_text(MAV_SEVERITY_INFO,
-            "Rescue: confirmed — starting search through %u WPs", _wp_count);
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: starting search through %u WPs", _wp_count);
         _phase = RescuePhase::WP_NAV;
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
@@ -813,29 +765,17 @@ void ModeRescue::handle_start_search()
     }
 }
 
-void ModeRescue::handle_deploy_lifebuoy()
-{
-    if (_lifebuoy_deployed) return;
-    fire_lifebuoy_servos();
-    _lifebuoy_deployed = true;
-    _deploy_time_ms    = AP_HAL::millis();
-    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: lifebuoy deployed (manual)");
-    _phase = RescuePhase::DEPLOYING;
-}
-
 void ModeRescue::handle_user_wp_reached(uint16_t wp_index, uint8_t reached)
 {
     gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u %s",
-                    wp_index + 1, reached ? "reached" : "not reached");
+                    wp_index+1, reached ? "reached" : "not reached");
     for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-        mavlink_msg_user_wp_reached_send(
-            gcs().chan(c)->get_chan(), wp_index, reached);
+        mavlink_msg_user_wp_reached_send(gcs().chan(c)->get_chan(), wp_index, reached);
     }
 }
 
 void ModeRescue::handle_home_beacon_gps(int32_t lat, int32_t lon,
-                                          float heading,
-                                          float v_north, float v_east)
+                                          float heading, float v_north, float v_east)
 {
     _beacon_lat     = lat * 1e-7f;
     _beacon_lon     = lon * 1e-7f;
@@ -843,26 +783,15 @@ void ModeRescue::handle_home_beacon_gps(int32_t lat, int32_t lon,
     _beacon_valid   = true;
 }
 
-// ---------------------------------------------------------------------------
-// send_status — RESCUE_STATUS (55004) at 1Hz
-// phase values:
-//   0=IDLE 1=TAKEOFF 2=TAKING_OFF 3=WP_NAV 4=INSERT_NAV
-//   5=CENTERING 6=DEPLOYING 7=GUIDED 8=WPS_GENERATED
-// ---------------------------------------------------------------------------
 void ModeRescue::send_status()
 {
     const uint32_t now = AP_HAL::millis();
     if (now - _last_status_ms < STATUS_INTERVAL_MS) return;
     _last_status_ms = now;
-
     for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
-        mavlink_msg_rescue_status_send(
-            gcs().chan(c)->get_chan(),
-            static_cast<uint8_t>(_phase),
-            _wp_count,
-            _current_idx,
-            (_wp_count > 0) ? 1 : 0   // wps_loaded
-        );
+        mavlink_msg_rescue_status_send(gcs().chan(c)->get_chan(),
+            static_cast<uint8_t>(_phase), _wp_count, _current_idx,
+            (_wp_count > 0) ? 1 : 0);
     }
 }
 

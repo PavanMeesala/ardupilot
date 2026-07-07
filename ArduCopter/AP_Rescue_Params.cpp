@@ -340,32 +340,23 @@ const AP_Param::GroupInfo AP_Rescue_Params::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("PWM_CH3",39,AP_Rescue_Params,life_pwm_ch3,11),
 
-    // @Param: PWM_VAL1
-    // @DisplayName: Lifebuoy PWM Value 1
-    // @Description: PWM value commanded on lifebuoy deployment channel 1 during deployment.
+    // @Param: DEP_PWM
+    // @DisplayName: PWM value to deploy lifebuoy servos
+    // @Description: PWM value commanded on lifebuoy deployment during deployment
     // @Units: us
     // @Range: 1000 2000
     // @Increment: 1
     // @User: Advanced
-    AP_GROUPINFO("PWM_VAL1",40,AP_Rescue_Params,life_pwm_val1,1800),
+    AP_GROUPINFO("DEP_PWM",40,AP_Rescue_Params,life_deploy_pwm,1800),
 
-    // @Param: PWM_VAL2
-    // @DisplayName: Lifebuoy PWM Value 2
-    // @Description: PWM value commanded on lifebuoy deployment channel 2 during deployment.
+    // @Param: RET_PWM
+    // @DisplayName: PWM value to retract lifebuoy servos
+    // @Description: PWM value commanded on lifebuoy deployment during retraction
     // @Units: us
     // @Range: 1000 2000
     // @Increment: 1
     // @User: Advanced
-    AP_GROUPINFO("PWM_VAL2",41,AP_Rescue_Params,life_pwm_val2,1800),
-
-    // @Param: PWM_VAL3
-    // @DisplayName: Lifebuoy PWM Value 3
-    // @Description: PWM value commanded on lifebuoy deployment channel 3 during deployment.
-    // @Units: us
-    // @Range: 1000 2000
-    // @Increment: 1
-    // @User: Advanced
-    AP_GROUPINFO("PWM_VAL3",42,AP_Rescue_Params,life_pwm_val3,1700),
+    AP_GROUPINFO("RET_PWM",41,AP_Rescue_Params,life_retract_pwm,1100),
 
     // @Param: LIFE_ALT
     // @DisplayName: Lifebuoy Deployment Altitude
