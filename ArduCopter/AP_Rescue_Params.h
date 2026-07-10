@@ -74,7 +74,7 @@ public:
     AP_Int16 life_deploy_pwm;
     AP_Int16 life_retract_pwm;
 
-    AP_Int16 life_dep_alt;
+    AP_Float life_dep_alt;
     AP_Float hfov;
     AP_Float search_dist;
     AP_Float overlap;

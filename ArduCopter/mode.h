@@ -1310,7 +1310,7 @@ private:
     int16_t  _target_dx{0};
     int16_t  _target_dy{0};
     bool     _target_px_valid{false};
-    uint32_t _target_px_last_ms{0};
+    // uint32_t _target_px_last_ms{0};
     uint32_t _detection_window_start_ms{0};
     uint8_t  _detection_count{0};
     bool     _tracking_active{false};
@@ -1318,9 +1318,12 @@ private:
     bool     _first_wp_reached{false};
 
     uint32_t _hold_point_start_ms{0};
-    Vector3p _hold_point_loc{};
+    Vector3p _hold_point_neu{}; // <--- Fixed: Uncommented to resolve scope compiler error
 
-    // Location _target_gps_loc{};
+    Location _target_gps_loc{};
+    Vector3p target_pos_neu{0.0f, 0.0f, 0.0f};
+    Vector3f _target_vel_neu{0.0f, 0.0f, 0.0f};
+    Vector3f _accel_cmd{0.0f, 0.0f, 0.0f};
     // bool     _target_gps_valid{false};
     uint32_t _target_approach_start_ms{0};
 
@@ -1334,6 +1337,9 @@ private:
     uint32_t _beacon_last_ms{0};
     float    _beacon_lat{0.0f};
     float    _beacon_lon{0.0f};
+    float gimbal_roll_rad {0.0f};
+    float gimbal_pitch_rad {0.0f};
+    float gimbal_yaw_rad {0.0f};
 
     uint32_t _last_status_ms{0};
 
@@ -1345,12 +1351,14 @@ private:
     bool wp_nav_set_destination_insert(const Location &dest);
     void advance_to_next_wp();
     void notify_wp_reached(uint8_t idx);
-    void compute_hold_point(Vector3p &hold_loc);
+    void set_hold_point();
     void compute_centering_velocity(float &vx_out, float &vy_out);
     void fire_lifebuoy_servos(bool deploy);
     void switch_to_dynamic_landing();
     void send_status();
-    void update_detection_window();
+    // void update_detection_window();
+    bool calculate_target_location(Location &target_loc);
+    void get_gimbal_angles();
 
     void takeoff_pending_run();
     void taking_off_run();
@@ -1360,6 +1368,9 @@ private:
     void target_approach_run();
     void centering_run();
     void deploying_run();
+    // void pos_control_start();
+    void posvelaccel_control_start();
+    void waypoint_control_start();
 };
 
 // ============================================================================

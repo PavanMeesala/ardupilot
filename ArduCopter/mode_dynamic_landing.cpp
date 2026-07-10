@@ -269,8 +269,11 @@ void ModeDynamicLanding::precision_landing_run()
          vx * sinf(hdg_rad) + vy * cosf(hdg_rad),
         -vz
     };
-    set_vel_NEU_ms(vel_neu);
-    ModeGuided::run();
+    Vector3f accel_cmd;
+
+    set_vel_accel_NEU_m(vel_neu, accel_cmd, false,  0.0f, false, 0.0f, false);
+    // ModeGuided::run();
+    velaccel_control_run();
 }
 
 // ---------------------------------------------------------------------------
