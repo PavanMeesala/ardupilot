@@ -1270,10 +1270,11 @@ private:
     static constexpr float    CENTER_ALPHA               = 0.05f;
     static constexpr uint32_t STATUS_INTERVAL_MS         = 1000;
     static constexpr uint32_t BEACON_TIMEOUT_MS          = 5000;
-    static constexpr uint8_t  MIN_DETECTIONS_FOR_TRACK   = 10;
-    static constexpr uint32_t HOLD_POINT_WAIT_MS         = 10000;
+    static constexpr uint8_t  MIN_DETECTIONS_FOR_TRACK   = 20;
+    static constexpr uint32_t HOLD_POINT_WAIT_MS         = 20000;
     static constexpr uint32_t TARGET_APPROACH_WAIT_MS    = 12000;
     static constexpr uint32_t DETECTION_WINDOW_MS        = 5000;
+    static constexpr uint32_t TRACKING_TIMEOUT           = 5000;
 
     enum class RescuePhase : uint8_t {
         IDLE            = 0,
@@ -1287,6 +1288,7 @@ private:
         DEPLOYING       = 8,
         GUIDED          = 9,
         WPS_GENERATED   = 10,
+        TEST            = 11,
     };
 
     // Waypoints
@@ -1310,17 +1312,19 @@ private:
     int16_t  _target_dx{0};
     int16_t  _target_dy{0};
     bool     _target_px_valid{false};
-    // uint32_t _target_px_last_ms{0};
+    uint32_t _target_px_last_ms{0};
     uint32_t _detection_window_start_ms{0};
     uint8_t  _detection_count{0};
     bool     _tracking_active{false};
+    uint8_t  _failed_attempts{0};
+    uint32_t _tracking_ignore_until{0};
 
     bool     _first_wp_reached{false};
 
     uint32_t _hold_point_start_ms{0};
-    Vector3p _hold_point_neu{}; // <--- Fixed: Uncommented to resolve scope compiler error
+    Vector3p _hold_point_neu{};
 
-    Location _target_gps_loc{};
+    Location _target_gps_loc;
     Vector3p target_pos_neu{0.0f, 0.0f, 0.0f};
     Vector3f _target_vel_neu{0.0f, 0.0f, 0.0f};
     Vector3f _accel_cmd{0.0f, 0.0f, 0.0f};
@@ -1356,7 +1360,7 @@ private:
     void fire_lifebuoy_servos(bool deploy);
     void switch_to_dynamic_landing();
     void send_status();
-    // void update_detection_window();
+    void update_detection_window();
     bool calculate_target_location(Location &target_loc);
     void get_gimbal_angles();
 
@@ -1369,8 +1373,13 @@ private:
     void centering_run();
     void deploying_run();
     // void pos_control_start();
-    void posvelaccel_control_start();
-    void waypoint_control_start();
+    // void posvelaccel_control_start();
+    // void waypoint_control_start();
+    void test_pos_comm();
+    void pos_run();
+    void vel_run();
+    void dest_location(Location &dest_loc);
+    void waypoint_control_run();
 };
 
 // ============================================================================

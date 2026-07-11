@@ -90,6 +90,7 @@ void ModeDynamicLanding::gps_follow_run()
 
     if (dist < (float)(int16_t)g2.rescue.dyn_tar_thr && _marker.detected) {
         gcs().send_text(MAV_SEVERITY_INFO, "DynLand: target reached, Vis Foll on");
+        posvelaccel_control_start();
         precision_landing_enter();
         _phase = LandPhase::PRECISION;
     }
@@ -160,8 +161,6 @@ void ModeDynamicLanding::precision_landing_run()
         return;
     }
 
-    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-
     const uint32_t now_ms = AP_HAL::millis();
 
     const float detections_per_second = compute_detections_per_second(now_ms);
@@ -194,6 +193,7 @@ void ModeDynamicLanding::precision_landing_run()
     beacon_cur.lng = (int32_t)(_beacon.lon * 1e7f);
     beacon_cur.alt = 0;
     const float distance_to_target = copter.current_loc.get_distance(beacon_cur);
+    
 
     if (distance_to_target > (float)(int16_t)g2.rescue.dyn_tar_thr + 5.0f) {
         gcs().send_text(MAV_SEVERITY_INFO,
@@ -233,12 +233,12 @@ void ModeDynamicLanding::precision_landing_run()
         _smooth_marker_y = 0.8f * _marker.y + 0.2f * _smooth_marker_y;
         _smooth_marker_z = 0.8f * _marker.z + 0.2f * _smooth_marker_z;
 
-        const float time_interval = 1.0f / MAX((float)g2.rescue.vel_msg_rate, 0.001f);
+        // const float time_interval = 1.0f / MAX((float)g2.rescue.vel_msg_rate, 0.001f);
 
         const float marker_vx = 0.60f * _smooth_marker_x +
-                                0.04f * (_smooth_marker_x - _prev_smooth_marker_x) / time_interval;
+                                0.04f * (_smooth_marker_x - _prev_smooth_marker_x) * 20;
         const float marker_vy = 0.60f * _smooth_marker_y +
-                                0.04f * (_smooth_marker_y - _prev_smooth_marker_y) / time_interval;
+                                0.04f * (_smooth_marker_y - _prev_smooth_marker_y) * 20;
 
         const float clipped_marker_vx = constrain_float(marker_vx, -5.0f, 5.0f);
         const float clipped_marker_vy = constrain_float(marker_vy, -5.0f, 5.0f);
@@ -264,16 +264,47 @@ void ModeDynamicLanding::precision_landing_run()
         vy = _smooth_home_vy;
     }
 
-    const Vector3f vel_neu{
-         vx * cosf(hdg_rad) - vy * sinf(hdg_rad),
-         vx * sinf(hdg_rad) + vy * cosf(hdg_rad),
-        -vz
+    Vector3f vel_neu{
+        vx * cosf(hdg_rad) - vy * sinf(hdg_rad),
+        vx * sinf(hdg_rad) + vy * cosf(hdg_rad),
+        vz
     };
-    Vector3f accel_cmd;
+    
 
-    set_vel_accel_NEU_m(vel_neu, accel_cmd, false,  0.0f, false, 0.0f, false);
-    // ModeGuided::run();
-    velaccel_control_run();
+    set_vel_accel_NEU_m(vel_neu, Vector3f(), false, 0.0f, true, 0.0f, true, false);
+    // set_yaw_state_rad(false, 0.0f, false, 0.0f, false);
+    // auto_yaw.set_mode(AutoYaw::Mode::HOLD);
+    ModeGuided::run();
+
+    // Vector3f accel_cmd;
+
+    //  // set motors to full range
+    // motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+    // auto_yaw.set_mode(AutoYaw::Mode::HOLD);
+    // bool do_avoid = false;
+
+    // // update position controller with new target
+
+    // if (!stabilizing_vel_NE() && !do_avoid) {
+    //     // set the current commanded xy vel to the desired vel
+    //     vel_neu.xy() = pos_control->get_vel_desired_NEU_ms().xy();
+    // }
+    // pos_control->input_vel_accel_NE_m(vel_neu.xy(), accel_cmd.xy(), false);
+    // if (!stabilizing_vel_NE() && !do_avoid) {
+    //     // set position and velocity errors to zero
+    //     pos_control->stop_vel_NE_stabilisation();
+    // } else if (!stabilizing_pos_NE() && !do_avoid) {
+    //     // set position errors to zero
+    //     pos_control->stop_pos_NE_stabilisation();
+    // }
+    // pos_control->input_vel_accel_U_m(vel_neu.z, accel_cmd.z, false);
+
+    // // call velocity controller which includes z axis controller
+    // pos_control->update_NE_controller();
+    // pos_control->update_U_controller();
+
+    // // call attitude controller with auto yaw
+    // attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
 }
 
 // ---------------------------------------------------------------------------
