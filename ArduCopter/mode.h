@@ -1455,6 +1455,8 @@ private:
     uint8_t  _detection_window_count{0};
 
     uint32_t _last_status_ms{0};
+    uint32_t _last_update_ms{0};
+    Vector3f vel_neu;
 
     void gps_follow_run();
     void precision_landing_run();
@@ -1465,6 +1467,7 @@ private:
     void prune_detection_window(uint32_t now_ms);
     float compute_detections_per_second(uint32_t now_ms);
     void send_status();
+    void get_vel(Vector3f &vel_cmd_neu);
 };
 
 #if AP_SCRIPTING_ENABLED

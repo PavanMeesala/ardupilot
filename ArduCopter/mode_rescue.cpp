@@ -555,6 +555,7 @@ void ModeRescue::target_approach_run()
         _target_vel_neu.zero();
         _accel_cmd.zero();
         posvelaccel_control_start();
+        // pva_control_start();
         _phase = RescuePhase::CENTERING;
         // _phase = RescuePhase::GUIDED;
     }

@@ -90,8 +90,10 @@ void ModeDynamicLanding::gps_follow_run()
 
     if (dist < (float)(int16_t)g2.rescue.dyn_tar_thr && _marker.detected) {
         gcs().send_text(MAV_SEVERITY_INFO, "DynLand: target reached, Vis Foll on");
-        posvelaccel_control_start();
+        // velaccel_control_start();
+        pva_control_start();
         precision_landing_enter();
+        _last_update_ms = AP_HAL::millis();
         _phase = LandPhase::PRECISION;
     }
 }
@@ -150,6 +152,75 @@ float ModeDynamicLanding::compute_detections_per_second(uint32_t now_ms)
     return (float)_detection_window_count / DETECTION_WINDOW_S;
 }
 
+void ModeDynamicLanding::get_vel(Vector3f &vel_cmd_neu){
+    const uint32_t now = AP_HAL::millis();
+    const float detections_per_second = compute_detections_per_second(now);
+    const float since_last_detect_s = (now - _marker_last_detected_ms) * 0.001f;
+
+    float vz_ned = 0.0f; 
+
+    if (since_last_detect_s > (float)(int16_t)g2.rescue.mar_time_thr) {
+        vz_ned = -0.2f;
+    } else if (_marker.detected) {
+        const float distance_to_marker = sqrtf(_marker.x * _marker.x + _marker.y * _marker.y);
+        // gcs().send_text(MAV_SEVERITY_INFO,"x=%.2f y=%.2f z=%.2f dist=%.2f",(double)_marker.x,(double)_marker.y,(double)_marker.z,(double)distance_to_marker);
+        if (distance_to_marker <= _marker.z * 0.8f * (float)g2.rescue.alt_rest_cone_factor) {
+            vz_ned = 0.3f; 
+        } else if (distance_to_marker > _marker.z * 0.53f) {
+            vz_ned = -0.2f; 
+        } else {
+            vz_ned = 0.0f; 
+        }
+        _last_vz_command = vz_ned;
+        // gcs().send_text(MAV_SEVERITY_INFO,"det=%d marker_z=%.2f",_marker.detected,(double)_marker.z);
+    } else if (detections_per_second > (float)(int16_t)g2.rescue.mar_det_thr) {
+        vz_ned = _last_vz_command;
+    } else {
+        vz_ned = 0.0f;
+    }
+
+    // const float hdg_rad = radians(copter.ahrs.yaw_sensor * 0.01f);
+    Vector2f home_vel = Vector2f{_beacon.v_north, _beacon.v_east};
+    home_vel = copter.ahrs.earth_to_body2D(home_vel);
+    // const float home_vx =  _beacon.v_north * cosf(hdg_rad) + _beacon.v_east * sinf(hdg_rad);
+    // const float home_vy = -_beacon.v_north * sinf(hdg_rad) + _beacon.v_east * cosf(hdg_rad);
+
+    _smooth_home_vx = 0.7f * home_vel.x + 0.3f * _smooth_home_vx;
+    _smooth_home_vy = 0.7f * home_vel.y + 0.3f * _smooth_home_vy;
+
+    float vx, vy;
+
+    if (_marker.detected) {
+        _marker_last_detected_ms = now;
+        push_detection_timestamp(now);
+
+        _prev_smooth_marker_x = _smooth_marker_x;
+        _prev_smooth_marker_y = _smooth_marker_y;
+        _prev_smooth_marker_z = _smooth_marker_z;
+
+        _smooth_marker_x = 0.8f * _marker.x + 0.2f * _smooth_marker_x;
+        _smooth_marker_y = 0.8f * _marker.y + 0.2f * _smooth_marker_y;
+        _smooth_marker_z = 0.8f * _marker.z + 0.2f * _smooth_marker_z;
+
+        const float time_interval = 1.0f / MAX((float)g2.rescue.vel_msg_rate, 0.001f);
+
+        const float marker_vx = 0.6f * _smooth_marker_x + 0.04f * (_smooth_marker_x - _prev_smooth_marker_x) / time_interval;
+        const float marker_vy = 0.6f * _smooth_marker_y + 0.04f * (_smooth_marker_y - _prev_smooth_marker_y) / time_interval;
+
+        const float clipped_marker_vx = constrain_float(marker_vx, -5.0f, 5.0f);
+        const float clipped_marker_vy = constrain_float(marker_vy, -5.0f, 5.0f);
+
+        vx = _smooth_home_vx + clipped_marker_vx;
+        vy = _smooth_home_vy + clipped_marker_vy;
+    } else {
+        vx = _smooth_home_vx;
+        vy = _smooth_home_vy;
+    }
+    vel_cmd_neu = Vector3f{vx,vy,-vz_ned};
+    vel_cmd_neu.xy() = copter.ahrs.body_to_earth2D(vel_neu.xy());
+    // vel_cmd_neu = Vector3f{0.2,0.2,-0.1};
+}
+
 // ---------------------------------------------------------------------------
 // precision_landing_run — single unified loop, matches Python exactly
 // ---------------------------------------------------------------------------
@@ -161,152 +232,88 @@ void ModeDynamicLanding::precision_landing_run()
         return;
     }
 
-    const uint32_t now_ms = AP_HAL::millis();
-
-    const float detections_per_second = compute_detections_per_second(now_ms);
-
-    float vz;
-    const float since_last_detect_s = (now_ms - _marker_last_detected_ms) * 0.001f;
-
-    if (since_last_detect_s > (float)(int16_t)g2.rescue.mar_time_thr) {
-        vz = -0.2f;
-    } else if (_marker.detected) {
-        const float distance_to_marker = sqrtf(_marker.x * _marker.x +
-                                                _marker.y * _marker.y);
-        if (distance_to_marker <= _marker.z * 0.5f *
-            (float)g2.rescue.alt_rest_cone_factor) {
-            vz = 0.3f;
-        } else if (distance_to_marker > _marker.z * 0.53f) {
-            vz = -0.2f;
-        } else {
-            vz = 0.0f;
-        }
-        _last_vz_command = vz;
-    } else if (detections_per_second > (float)(int16_t)g2.rescue.mar_det_thr) {
-        vz = _last_vz_command;
-    } else {
-        vz = 0.0f;
-    }
-
     Location beacon_cur{};
     beacon_cur.lat = (int32_t)(_beacon.lat * 1e7f);
     beacon_cur.lng = (int32_t)(_beacon.lon * 1e7f);
     beacon_cur.alt = 0;
     const float distance_to_target = copter.current_loc.get_distance(beacon_cur);
-    
 
     if (distance_to_target > (float)(int16_t)g2.rescue.dyn_tar_thr + 5.0f) {
-        gcs().send_text(MAV_SEVERITY_INFO,
-            "DynLand: drifted too far (%.1fm), GPS Foll on", (double)distance_to_target);
+        gcs().send_text(MAV_SEVERITY_INFO, "DynLand: drifted too far (%.1fm), GPS Foll on", (double)distance_to_target);
         _phase = LandPhase::GPS_FOLLOW;
         return;
     }
 
-    const float hdg_rad = radians(copter.ahrs.yaw_sensor * 0.01f);
-    const float home_vx =  _beacon.v_north * cosf(hdg_rad) + _beacon.v_east * sinf(hdg_rad);
-    const float home_vy = -_beacon.v_north * sinf(hdg_rad) + _beacon.v_east * cosf(hdg_rad);
-
-    _smooth_home_vx = 0.7f * home_vx + 0.3f * _smooth_home_vx;
-    _smooth_home_vy = 0.7f * home_vy + 0.3f * _smooth_home_vy;
-
-    float vx, vy;
-
-    if (_marker.detected) {
-        _marker_last_detected_ms = now_ms;
-        push_detection_timestamp(now_ms);
-
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
-        if (_marker.z < 0.5f) {
-            gcs().send_text(MAV_SEVERITY_INFO,
-                "DynLand: SITL touchdown (marker_z=%.2f)", (double)_marker.z);
-            _phase = LandPhase::LANDED;
-            copter.arming.disarm(AP_Arming::Method::LANDED);
-            return;
-        }
+    float rel_alt = 0.0f;
+    if (copter.current_loc.relative_alt) {
+        rel_alt = copter.current_loc.alt * 0.01f;
+    }
+    else {
+        rel_alt = (copter.current_loc.alt - copter.ahrs.get_home().alt) * 0.01f;
+    }
+    if (_marker.z < 0.5f || rel_alt < 0.5f) {
+        gcs().send_text(MAV_SEVERITY_INFO, "DynLand: SITL touchdown (marker_z=%.2f)", (double)_marker.z);
+        _phase = LandPhase::LANDED;
+        copter.arming.disarm(AP_Arming::Method::LANDED);
+        return;
+    }
 #endif
 
-        _prev_smooth_marker_x = _smooth_marker_x;
-        _prev_smooth_marker_y = _smooth_marker_y;
-        _prev_smooth_marker_z = _smooth_marker_z;
-
-        _smooth_marker_x = 0.8f * _marker.x + 0.2f * _smooth_marker_x;
-        _smooth_marker_y = 0.8f * _marker.y + 0.2f * _smooth_marker_y;
-        _smooth_marker_z = 0.8f * _marker.z + 0.2f * _smooth_marker_z;
-
-        // const float time_interval = 1.0f / MAX((float)g2.rescue.vel_msg_rate, 0.001f);
-
-        const float marker_vx = 0.60f * _smooth_marker_x +
-                                0.04f * (_smooth_marker_x - _prev_smooth_marker_x) * 20;
-        const float marker_vy = 0.60f * _smooth_marker_y +
-                                0.04f * (_smooth_marker_y - _prev_smooth_marker_y) * 20;
-
-        const float clipped_marker_vx = constrain_float(marker_vx, -5.0f, 5.0f);
-        const float clipped_marker_vy = constrain_float(marker_vy, -5.0f, 5.0f);
-
-        vx = _smooth_home_vx + clipped_marker_vx;
-        vy = _smooth_home_vy + clipped_marker_vy;
-
-        bool lidar_threshold_reached = false;
-        if (copter.rangefinder_alt_ok()) {
-            lidar_threshold_reached =
-                copter.rangefinder_state.alt_m_filt.get() < (float)g2.rescue.mot_cutoff_thr;
-        }
-
-        if (lidar_threshold_reached && _marker.z < 0.7f) {
-            gcs().send_text(MAV_SEVERITY_INFO, "DynLand: lidar threshold reached");
-            _phase = LandPhase::LANDED;
-            copter.arming.disarm(AP_Arming::Method::LANDED);
-            return;
-        }
-
-    } else {
-        vx = _smooth_home_vx;
-        vy = _smooth_home_vy;
+    bool lidar_threshold_reached = false;
+    if (copter.rangefinder_alt_ok()) {
+        lidar_threshold_reached = copter.rangefinder_state.alt_m_filt.get() < (float)g2.rescue.mot_cutoff_thr;
     }
 
-    Vector3f vel_neu{
-        vx * cosf(hdg_rad) - vy * sinf(hdg_rad),
-        vx * sinf(hdg_rad) + vy * cosf(hdg_rad),
-        vz
-    };
+    if (lidar_threshold_reached && _marker.z < 0.7f) {
+        gcs().send_text(MAV_SEVERITY_INFO, "DynLand: lidar threshold reached");
+        _phase = LandPhase::LANDED;
+        copter.arming.disarm(AP_Arming::Method::LANDED);
+        return;
+    }
+    // if (AP_HAL::millis() - _last_update_ms > 33){
+        // _last_update_ms = AP_HAL::millis();
+    Vector3f vel_cmd;
+    Vector3f _accel_cmd;
+
+    // pva_control_start();
     
+    get_vel(vel_cmd);
+    // vel_cmd = Vector3f{0.2,0.2,-0.1};
 
-    set_vel_accel_NEU_m(vel_neu, Vector3f(), false, 0.0f, true, 0.0f, true, false);
-    // set_yaw_state_rad(false, 0.0f, false, 0.0f, false);
-    // auto_yaw.set_mode(AutoYaw::Mode::HOLD);
-    ModeGuided::run();
+    gcs().send_text(MAV_SEVERITY_INFO, "Velocity x:%.2f, y:%.2f, z:%.2f", (double)vel_cmd.x,(double)vel_cmd.y,(double)vel_cmd.z);
 
-    // Vector3f accel_cmd;
+    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+    set_yaw_state_rad(true, 0.0f, true, 0.0f, true);
 
-    //  // set motors to full range
-    // motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-    // auto_yaw.set_mode(AutoYaw::Mode::HOLD);
-    // bool do_avoid = false;
 
-    // // update position controller with new target
+    bool do_avoid = false;
 
-    // if (!stabilizing_vel_NE() && !do_avoid) {
-    //     // set the current commanded xy vel to the desired vel
-    //     vel_neu.xy() = pos_control->get_vel_desired_NEU_ms().xy();
+    // update position controller with new target
+
+    if (!stabilizing_vel_NE() && !do_avoid) {
+        // set the current commanded xy vel to the desired vel
+        vel_cmd.xy() = pos_control->get_vel_desired_NEU_ms().xy();
+    }
+    pos_control->input_vel_accel_NE_m(vel_cmd.xy(), _accel_cmd.xy(), false);
+    if (!stabilizing_vel_NE() && !do_avoid) {
+        // set position and velocity errors to zero
+        pos_control->stop_vel_NE_stabilisation();
+    } else if (!stabilizing_pos_NE() && !do_avoid) {
+        // set position errors to zero
+        pos_control->stop_pos_NE_stabilisation();
+    }
+    pos_control->input_vel_accel_U_m(vel_cmd.z, _accel_cmd.z, false);
+
+    // call velocity controller which includes z axis controller
+    pos_control->update_NE_controller();
+    pos_control->update_U_controller();
+
+    // call attitude controller with auto yaw
+    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
     // }
-    // pos_control->input_vel_accel_NE_m(vel_neu.xy(), accel_cmd.xy(), false);
-    // if (!stabilizing_vel_NE() && !do_avoid) {
-    //     // set position and velocity errors to zero
-    //     pos_control->stop_vel_NE_stabilisation();
-    // } else if (!stabilizing_pos_NE() && !do_avoid) {
-    //     // set position errors to zero
-    //     pos_control->stop_pos_NE_stabilisation();
-    // }
-    // pos_control->input_vel_accel_U_m(vel_neu.z, accel_cmd.z, false);
-
-    // // call velocity controller which includes z axis controller
-    // pos_control->update_NE_controller();
-    // pos_control->update_U_controller();
-
-    // // call attitude controller with auto yaw
-    // attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
+    
 }
-
 // ---------------------------------------------------------------------------
 // MAVLink handlers
 // ---------------------------------------------------------------------------
