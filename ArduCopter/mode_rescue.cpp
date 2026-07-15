@@ -694,23 +694,32 @@ void ModeRescue::switch_to_dynamic_landing()
     }
 }
 
+// void ModeRescue::fire_lifebuoy_servos(bool deploy)
+// {
+//     const uint8_t ch[3] = {
+//         (uint8_t)(int16_t)g2.rescue.life_pwm_ch1,
+//         (uint8_t)(int16_t)g2.rescue.life_pwm_ch2,
+//         (uint8_t)(int16_t)g2.rescue.life_pwm_ch3
+//     };
+//     int pwm = deploy ? g2.rescue.life_deploy_pwm : g2.rescue.life_retract_pwm;
+    
+//     for (uint8_t i = 0; i < 3; i++) {
+//         SRV_Channels::set_output_pwm_chan_timeout(ch[i] - 1, pwm, 10000);
+//     }
+//     gcs().send_text(MAV_SEVERITY_INFO,
+//         "Rescue: servos ch%u=%u ch%u=%u ch%u=%u",
+//         ch[0], pwm, ch[1], pwm, ch[2], pwm);
+// }
 void ModeRescue::fire_lifebuoy_servos(bool deploy)
 {
-    const uint8_t ch[3] = {
-        (uint8_t)(int16_t)g2.rescue.life_pwm_ch1,
-        (uint8_t)(int16_t)g2.rescue.life_pwm_ch2,
-        (uint8_t)(int16_t)g2.rescue.life_pwm_ch3
-    };
-    int pwm = deploy ? g2.rescue.life_deploy_pwm : g2.rescue.life_retract_pwm;
-    
-    for (uint8_t i = 0; i < 3; i++) {
-        SRV_Channels::set_output_pwm_chan_timeout(ch[i] - 1, pwm, 10000);
-    }
-    gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: servos ch%u=%u ch%u=%u ch%u=%u",
-        ch[0], pwm, ch[1], pwm, ch[2], pwm);
-}
+    const uint16_t pwm = deploy ?
+        g2.rescue.life_deploy_pwm.get() :
+        g2.rescue.life_retract_pwm.get();
 
+    AP::servorelayevents()->do_set_servo(g2.rescue.life_pwm_ch1.get(), pwm);
+    AP::servorelayevents()->do_set_servo(g2.rescue.life_pwm_ch2.get(), pwm);
+    AP::servorelayevents()->do_set_servo(g2.rescue.life_pwm_ch3.get(), pwm);
+}
 void ModeRescue::advance_to_next_wp()
 {
     if (_current_idx + 1 < _wp_count) {
@@ -791,12 +800,18 @@ void ModeRescue::handle_generate_wps(uint16_t length_m)
 
 void ModeRescue::handle_lifebuoy(bool deploy)
 {
-    if (_lifebuoy_deployed) return;
+    // if (_lifebuoy_deployed) return;
     fire_lifebuoy_servos(deploy);
-    _lifebuoy_deployed = true;
-    _deploy_time_ms    = AP_HAL::millis();
-    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: lifebuoy deployed (manual)");
-    _phase = RescuePhase::DEPLOYING;
+    if (deploy){
+        _lifebuoy_deployed = true;
+        _deploy_time_ms    = AP_HAL::millis();
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: lifebuoy deployed (manual)");
+    }
+    else{
+        _lifebuoy_deployed = false;
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: lifebuoy retracted (manual)");
+    }
+    // _phase = RescuePhase::DEPLOYING;
 }
 
 void ModeRescue::handle_insert_wp(int32_t lat_degE7, int32_t lon_degE7)

@@ -1336,6 +1336,7 @@ private:
 
     bool     _lifebuoy_deployed{false};
     uint32_t _deploy_time_ms{0};
+    // bool     _manual_deploy{false};
 
     bool     _beacon_valid{false};
     uint32_t _beacon_last_ms{0};
@@ -1457,6 +1458,7 @@ private:
     uint32_t _last_status_ms{0};
     uint32_t _last_update_ms{0};
     Vector3f vel_neu;
+    Vector3f _accel_cmd;
 
     void gps_follow_run();
     void precision_landing_run();
@@ -1467,7 +1469,7 @@ private:
     void prune_detection_window(uint32_t now_ms);
     float compute_detections_per_second(uint32_t now_ms);
     void send_status();
-    void get_vel(Vector3f &vel_cmd_neu);
+    void get_vel(float dt);
 };
 
 #if AP_SCRIPTING_ENABLED

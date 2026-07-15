@@ -365,7 +365,7 @@ const AP_Param::GroupInfo AP_Rescue_Params::var_info[] = {
     // @Range: 1 100
     // @Increment: 1
     // @User: Advanced
-    AP_GROUPINFO("LIFE_ALT",43,AP_Rescue_Params,life_dep_alt,20.0f),
+    AP_GROUPINFO("LIFE_ALT",43,AP_Rescue_Params,life_dep_alt,15.0f),
 
     // @Param: NAV_ALT
     // @DisplayName: Navigation Altitude
@@ -374,7 +374,7 @@ const AP_Param::GroupInfo AP_Rescue_Params::var_info[] = {
     // @Range: 1 100
     // @Increment: 1
     // @User: Advanced
-    AP_GROUPINFO("NAV_ALT",44,AP_Rescue_Params,nav_alt,30),
+    AP_GROUPINFO("NAV_ALT",44,AP_Rescue_Params,nav_alt,20.0f),
     // @Param: HFOV
     // @DisplayName: Camera Horizontal FOV
     // @Description: Horizontal field of view of the downward camera used for lawn pattern strip spacing calculation
