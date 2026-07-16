@@ -200,7 +200,7 @@ void ModeDynamicLanding::get_vel(float dt)
 
         vx = _smooth_home_vx + clipped_marker_vx; 
         vy = _smooth_home_vy + clipped_marker_vy; 
-        gcs().send_text(MAV_SEVERITY_INFO,"Marker Vel x=%.2f y=%.2f",(double)clipped_marker_vx,(double)clipped_marker_vy);
+        // gcs().send_text(MAV_SEVERITY_INFO,"Marker Vel x=%.2f y=%.2f",(double)clipped_marker_vx,(double)clipped_marker_vy);
     } else {
         vx = _smooth_home_vx;
         vy = _smooth_home_vy;
@@ -308,7 +308,7 @@ void ModeDynamicLanding::handle_aruco_marker(float x_m, float y_m,
         _marker.z        = z_m;
         _marker.detected = true;
         _marker_last_detected_ms = now;
-        gcs().send_text(MAV_SEVERITY_INFO," Marker Position x=%.2f y=%.2f z=%.2f",(double)_marker.x,(double)_marker.y,(double)_marker.z);
+        // gcs().send_text(MAV_SEVERITY_INFO," Marker Position x=%.2f y=%.2f z=%.2f",(double)_marker.x,(double)_marker.y,(double)_marker.z);
         
         push_detection_timestamp(now);
     } else {

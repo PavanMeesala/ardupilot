@@ -1240,7 +1240,6 @@ public:
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method method) const override { return true; }
 
-    // MAVLink handlers — called from GCS_MAVLink_Copter.cpp
     void handle_rescue_wp(uint16_t seq, uint16_t total_count,
                            int32_t lat_degE7, int32_t lon_degE7);
     void handle_target_detected(int16_t dx, int16_t dy);
@@ -1288,10 +1287,8 @@ private:
         DEPLOYING       = 8,
         GUIDED          = 9,
         WPS_GENERATED   = 10,
-        TEST            = 11,
     };
 
-    // Waypoints
     Location _waypoints[RESCUE_WP_MAX];
     uint8_t  _wp_count{0};
     uint16_t _expected_count{0};
@@ -1300,15 +1297,12 @@ private:
     bool     _wpnav_initialised{false};
     bool     _wps_from_generate{false};
 
-    // Inserted WP
     Location _inserted_wp{};
     bool     _has_inserted_wp{false};
 
-    // Phase state
     RescuePhase _phase{RescuePhase::IDLE};
     uint32_t    _mission_start_ms{0};
 
-    // Detection / tracking state (mirrors detection.py + navigation.py)
     int16_t  _target_dx{0};
     int16_t  _target_dy{0};
     bool     _target_px_valid{false};
@@ -1318,6 +1312,12 @@ private:
     bool     _tracking_active{false};
     uint8_t  _failed_attempts{0};
     uint32_t _tracking_ignore_until{0};
+    float gimbal_pitch_cmd{0.0f};
+    float gimbal_yaw_cmd{0.0f};
+    float gimbal_roll_cmd{0.0f};
+    bool first{true};
+    uint32_t gimbal_last_update_ms{0};
+    uint32_t last_tar_up{0};
 
     bool     _first_wp_reached{false};
 
@@ -1328,7 +1328,6 @@ private:
     Vector3p target_pos_neu{0.0f, 0.0f, 0.0f};
     Vector3f _target_vel_neu{0.0f, 0.0f, 0.0f};
     Vector3f _accel_cmd{0.0f, 0.0f, 0.0f};
-    // bool     _target_gps_valid{false};
     uint32_t _target_approach_start_ms{0};
 
     float    _smooth_vx{0.0f};
@@ -1345,6 +1344,7 @@ private:
     float gimbal_roll_rad {0.0f};
     float gimbal_pitch_rad {0.0f};
     float gimbal_yaw_rad {0.0f};
+    bool gimbal_point_down{false};
 
     uint32_t _last_status_ms{0};
 
@@ -1362,8 +1362,8 @@ private:
     void switch_to_dynamic_landing();
     void send_status();
     void update_detection_window();
-    bool calculate_target_location(Location &target_loc);
-    void get_gimbal_angles();
+    bool calculate_target_location();
+    void gimbal_control();
 
     void takeoff_pending_run();
     void taking_off_run();
@@ -1373,19 +1373,8 @@ private:
     void target_approach_run();
     void centering_run();
     void deploying_run();
-    // void pos_control_start();
-    // void posvelaccel_control_start();
-    // void waypoint_control_start();
-    void test_pos_comm();
-    void pos_run();
-    void vel_run();
-    void dest_location(Location &dest_loc);
-    void waypoint_control_run();
+    void get_gimbal_rad();
 };
-
-// ============================================================================
-// Add this class declaration to ArduCopter/mode.h (after ModeRescue)
-// ============================================================================
 
 class ModeDynamicLanding : public ModeGuided {
 public:

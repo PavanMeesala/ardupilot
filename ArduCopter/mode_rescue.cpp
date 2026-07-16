@@ -1,7 +1,7 @@
 #include "Copter.h"
 
 #if MODE_RESCUE_ENABLED
-
+static AP_Mount* mount = AP::mount();
 // ---------------------------------------------------------------------------
 // init
 // ---------------------------------------------------------------------------
@@ -16,9 +16,7 @@ bool ModeRescue::init(bool ignore_checks)
     _target_dx                  = 0;
     _target_dy                  = 0;
     _target_px_valid            = false;
-    // _target_px_last_ms          = 0;
     _detection_window_start_ms  = 0;
-    // _detection_count            = 0;
     _tracking_active            = false;
     _first_wp_reached           = false;
     _hold_point_start_ms        = 0;
@@ -27,6 +25,7 @@ bool ModeRescue::init(bool ignore_checks)
     _smooth_vy                  = 0.0f;
     _lifebuoy_deployed          = false;
     _deploy_time_ms             = 0;
+    gimbal_last_update_ms = AP_HAL::millis();
 
     if (!ModeGuided::init(ignore_checks)) {
         return false;
@@ -42,6 +41,7 @@ bool ModeRescue::init(bool ignore_checks)
 void ModeRescue::run()
 {
     send_status();
+    gimbal_control();
 
     switch (_phase) {
     case RescuePhase::IDLE:            ModeGuided::run();       break;
@@ -55,7 +55,6 @@ void ModeRescue::run()
     case RescuePhase::CENTERING:       centering_run();         break;
     case RescuePhase::DEPLOYING:       deploying_run();         break;
     case RescuePhase::GUIDED:          ModeGuided::run();       break;
-    case RescuePhase::TEST:            pos_run();  break;
     }
 }
 void ModeRescue::update_detection_window()
@@ -248,13 +247,14 @@ void ModeRescue::taking_off_run()
 // ---------------------------------------------------------------------------
 void ModeRescue::wp_nav_run()
 {
+    uint32_t now = AP_HAL::millis();
     if (_tracking_active &&
-        AP_HAL::millis() - _target_px_last_ms >
+        now - _target_px_last_ms >
         (uint32_t)(g2.rescue.track_timeout * 1000.0f)) {
         _tracking_active = false;
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target lost, resuming WP nav");
     }
-    if (_first_wp_reached && _tracking_active && (AP_HAL::millis() - _tracking_ignore_until > 0)) {
+    if (_first_wp_reached && _tracking_active && (now - _tracking_ignore_until > 0)) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target locked, going to hold point");
         set_hold_point();
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: hold point (dx=%.1f dy=%.1f)",
@@ -262,12 +262,10 @@ void ModeRescue::wp_nav_run()
                 (double)_hold_point_neu.y);
         _hold_point_start_ms = AP_HAL::millis();
         _phase = RescuePhase::HOLD_POINT;
-        // switch_to_dynamic_landing();
         return;
     }
 
     if (_has_inserted_wp) {
-        _has_inserted_wp = false;
         Location dest = _inserted_wp;
         apply_nav_alt(dest);
         if (wp_nav_set_destination_insert(dest)) {
@@ -278,9 +276,10 @@ void ModeRescue::wp_nav_run()
     }
 
     if (_mission_start_ms > 0 &&
-        AP_HAL::millis() - _mission_start_ms >
+        now - _mission_start_ms >
         (uint32_t)((int32_t)g2.rescue.miss_timeout * 1000)) {
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: mission timeout");
+        gimbal_point_down = true;
         switch_to_dynamic_landing();
         return;
     }
@@ -311,13 +310,21 @@ void ModeRescue::wp_nav_run()
 // ---------------------------------------------------------------------------
 void ModeRescue::insert_nav_run()
 {
-
-    if (_first_wp_reached && _tracking_active) {
+    uint32_t now = AP_HAL::millis();
+    if (_tracking_active &&
+        now - _target_px_last_ms >
+        (uint32_t)(g2.rescue.track_timeout * 1000.0f)) {
+        _tracking_active = false;
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target lost, resuming Navigation");
+    }
+    if (_first_wp_reached && _tracking_active && (now - _tracking_ignore_until > 0)) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: target during insert nav, hold point");
         set_hold_point();
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: hold point (dx=%.1f dy=%.1f)",
+                (double)_hold_point_neu.x, 
+                (double)_hold_point_neu.y);
         _hold_point_start_ms = AP_HAL::millis();
         _phase = RescuePhase::HOLD_POINT;
-        // switch_to_dynamic_landing();
         return;
     }
 
@@ -337,6 +344,7 @@ void ModeRescue::insert_nav_run()
             _current_idx + 1, _wp_count);
         notify_wp_reached(_current_idx + _insert_nav_number);
         _insert_nav_number++;
+        _has_inserted_wp = false;
         _phase = RescuePhase::WP_NAV;
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
@@ -358,7 +366,6 @@ void ModeRescue::set_hold_point()
     
     const float v_north = _target_vel_neu.x; 
     const float v_east  = _target_vel_neu.y;
-    // const float v       = sqrtf(v_north * v_north + v_east * v_east);
     const float v = _target_vel_neu.xy().length();
 
 
@@ -380,61 +387,29 @@ void ModeRescue::set_hold_point()
     }
     _hold_point_neu.xy() += pos_ned_m.xy();
     _hold_point_neu.z -= pos_ned_m.z;
-    pva_control_start();
+    set_pos_NEU_m(_hold_point_neu, false, 0.0f, false, 0.0f, true, false);
 }
 // ---------------------------------------------------------------------------
 // HOLD_POINT
 // ---------------------------------------------------------------------------
 void ModeRescue::hold_point_run()
 {
-    // if not armed set throttle to zero and exit immediately
-    if (is_disarmed_or_landed()) {
-        // do not spool down tradheli when on the ground with motor interlock enabled
-        make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
-        return;
-    }
-    // get_gimbal_angles();
-
-    // calculate terrain adjustments
-    float terr_offset_m = 0.0f;
-
-    // set motors to full range
-    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-
-    // send position and velocity targets to position controller
-    _accel_cmd.zero();
-    _target_vel_neu.zero();
-
-    float pos_offset_z_buffer_m = 0.0; // Vertical buffer size in m
-
-    pos_control->input_pos_NEU_m(_hold_point_neu, terr_offset_m, pos_offset_z_buffer_m);
-
-    // run position controllers
-    pos_control->update_NE_controller();
-    pos_control->update_U_controller();
-
-    // call attitude controller with auto yaw
-    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
-
-
+    ModeGuided::run();
+    gcs().send_text(MAV_SEVERITY_INFO, "hold point run go to target dx dy.");
     const uint32_t now    = AP_HAL::millis();
     const uint32_t waited = now - _hold_point_start_ms;
 
     const bool target_locked = _target_px_valid && ((sq((float)_target_dx) + sq((float)_target_dy)) < 900.0f);
-    // gcs().send_text(MAV_SEVERITY_INFO,
-    //         "Rescue: target pose pixel (dx=%d dy=%d)",
-    //         (int)_target_dx, (int)_target_dy);
-
     if (target_locked) {
         gcs().send_text(MAV_SEVERITY_INFO,
             "Rescue: target locked pixel (dx=%d dy=%d), target approach",
             (int)_target_dx, (int)_target_dy);
-        if (calculate_target_location(_target_gps_loc)) {
-            dest_location(_target_gps_loc);
+        _target_gps_loc.zero();
+        if (calculate_target_location()) {
+            set_destination(_target_gps_loc, false, 0.0f, false, 0.0f);
         }
         _phase = RescuePhase::TARGET_APPROACH;
         _target_approach_start_ms = now;
-        // switch_to_dynamic_landing();
         
         return;
     }
@@ -450,36 +425,90 @@ void ModeRescue::hold_point_run()
             _tracking_ignore_until = AP_HAL::millis() + 120000;
             _failed_attempts = 0;
         }
-        _phase = RescuePhase::WP_NAV;
-        Location dest = _waypoints[_current_idx];
+        gimbal_point_down = false;
+        Location dest;
+        if (_has_inserted_wp) {
+            dest = _inserted_wp;
+            _phase = RescuePhase::INSERT_NAV;
+        }else{
+            dest = _waypoints[_current_idx];
+            _phase = RescuePhase::WP_NAV;
+        }
         apply_nav_alt(dest);
         wp_nav_set_destination_insert(dest);
     }
 }
-
-void ModeRescue::get_gimbal_angles()
-{
-    gimbal_roll_rad = 0;
-    gimbal_pitch_rad = 0;
-    gimbal_yaw_rad = 0;
-    AP_Mount* mount = AP::mount();
-    if (mount != nullptr) {
-        mount->get_attitude_euler(0, gimbal_roll_rad, gimbal_pitch_rad, gimbal_yaw_rad);
-        gimbal_roll_rad  = radians(gimbal_roll_rad);
-        gimbal_pitch_rad = radians(gimbal_pitch_rad);
-        gimbal_yaw_rad   = radians(gimbal_yaw_rad);
-
-        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch rad=%.3f", (double)gimbal_pitch_rad);
-    }
+void ModeRescue::get_gimbal_rad(){
+    mount->get_attitude_euler(0, gimbal_roll_rad, gimbal_pitch_rad, gimbal_yaw_rad);
+    gimbal_roll_rad  = radians(gimbal_roll_rad);
+    gimbal_pitch_rad = radians(gimbal_pitch_rad);
+    gimbal_yaw_rad   = radians(gimbal_yaw_rad);
 }
 
+void ModeRescue::gimbal_control()
+{   
+    float gimbal_pitch_tar{0.0f};
+    float gimbal_yaw_tar{0.0f};
+    
+    const uint32_t now = AP_HAL::millis();
+
+    if (mount == nullptr) {
+        return;
+    }
+    if (first){
+        mount->get_attitude_euler(0, gimbal_roll_cmd, gimbal_pitch_cmd, gimbal_yaw_cmd);
+        first = false;
+    }
+
+    if (now - gimbal_last_update_ms > 50){
+        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch deg=%.3f", (double)gimbal_pitch_tar);
+        gimbal_last_update_ms = now;
+        if (gimbal_point_down){
+            gimbal_pitch_cmd = -90;
+            gimbal_yaw_cmd = 0;
+        }else if(_tracking_active){
+            float yaw_adjust{0.0f};
+            float pitch_adjust{0.0f};
+            if (! isnan(_target_dx) ){
+                float dx_norm{0.0f};
+                float dy_norm{0.0f};
+                // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal dx=%.3f, dy=%.3f", (double)_target_dx, (double)_target_dy);
+                dx_norm = (float)_target_dx / (g2.rescue.gmb_cam_wid / 2);
+                dy_norm = (float)_target_dy / (g2.rescue.gmb_cam_hgt / 2);
+                // gcs().send_text(MAV_SEVERITY_INFO,"dxn=%.4f dyn=%.4f",(double)dx_norm,(double)dy_norm);
+                yaw_adjust = dx_norm * (g2.rescue.gmb_hfov / 2);
+                pitch_adjust = -dy_norm * (g2.rescue.gmb_vfov / 2);
+                // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch adjust det=%.3f", (double)pitch_adjust);
+            }else{
+                yaw_adjust = 0;
+                pitch_adjust = 0; 
+            }
+            gimbal_pitch_tar = gimbal_pitch_cmd + pitch_adjust;
+            gimbal_yaw_tar = gimbal_yaw_cmd + yaw_adjust;
+            gimbal_pitch_tar = constrain_float(gimbal_pitch_tar,-90.0f,-10.0f);
+            gimbal_yaw_tar = constrain_float(gimbal_yaw_tar,-110.0f,110.0f);
+            gimbal_pitch_cmd = 0.3f*gimbal_pitch_tar + 0.7f*gimbal_pitch_cmd;
+            gimbal_yaw_cmd = 0.3f*gimbal_yaw_tar + 0.7f*gimbal_yaw_cmd;
+        }else{
+            gimbal_pitch_cmd = g2.rescue.gmb_pit_poi;
+            gimbal_yaw_cmd = g2.rescue.gmb_yaw_poi;
+        }
+        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch deg=%.3f", (double)gimbal_pitch_cmd);
+        // uint8_t instance, float roll_deg, float pitch_deg, float yaw_deg, bool yaw_is_earth_frame
+        // yaw_is_earth_frame (aka yaw_lock) should be true if yaw angle is earth-frame, false if body-frame
+        mount->set_angle_target(0.0f, gimbal_pitch_cmd, gimbal_yaw_cmd, false);
+
+        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch=%.3f, yaw=%.3f", (double)gimbal_pitch_tar, (double)gimbal_pitch_tar);
+
+    }
+}
 // ---------------------------------------------------------------------------
 // TARGET_Location
 // ---------------------------------------------------------------------------
-bool ModeRescue::calculate_target_location(Location &target_loc)
+bool ModeRescue::calculate_target_location()
 {
     float z = 0.0f;
-    if (!copter.ahrs.get_location(target_loc)) {
+    if (!copter.ahrs.get_location(_target_gps_loc)) {
         return false;
     }
     if (copter.current_loc.relative_alt) {
@@ -495,9 +524,8 @@ bool ModeRescue::calculate_target_location(Location &target_loc)
         z = copter.rangefinder_state.alt_m;
     }
     
-    get_gimbal_angles();
+    get_gimbal_rad();
 
-    // 0.0174 radians is ~1 deg. Prevents division by zero or extreme trigonometry scales.
     if (fabsf(gimbal_pitch_rad) < 0.0174f) {
         gimbal_pitch_rad = (gimbal_pitch_rad >= 0.0f) ? 0.0174f : -0.0174f;
     }
@@ -509,8 +537,8 @@ bool ModeRescue::calculate_target_location(Location &target_loc)
     target_body.y = distance * sinf(gimbal_yaw_rad); 
 
     target_body = copter.ahrs.body_to_earth2D_p(target_body);
-    target_loc.offset(target_body.x, target_body.y); 
-    target_loc.set_alt_cm(copter.current_loc.alt, Location::AltFrame::ABOVE_HOME);
+    _target_gps_loc.offset(target_body.x, target_body.y); 
+    _target_gps_loc.set_alt_m((float)g2.rescue.nav_alt, Location::AltFrame::ABOVE_HOME);
 
     return true;
 }
@@ -520,44 +548,25 @@ bool ModeRescue::calculate_target_location(Location &target_loc)
 // ---------------------------------------------------------------------------
 void ModeRescue::target_approach_run()
 {
-    // if not armed set throttle to zero and exit immediately
-    if (is_disarmed_or_landed()) {
-        // do not spool down tradheli when on the ground with motor interlock enabled
-        make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
-        return;
-    }
-
-    // set motors to full range
-    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-
-    // run waypoint controller
-    copter.failsafe_terrain_set_status(wp_nav->update_wpnav());
-
-    // call z-axis position controller (wpnav should have already updated it's alt target)
-    pos_control->update_U_controller();
-
-    // call attitude controller with auto yaw
-    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
-
+    ModeGuided::run();
+    gcs().send_text(MAV_SEVERITY_INFO, "go to target gps.");
     const uint32_t now     = AP_HAL::millis();
     const uint32_t elapsed = now - _target_approach_start_ms;
     
     
-    if (wp_nav->reached_wp_destination() && elapsed > 1500) {
+    if (wp_nav->reached_wp_destination()) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: Target approach reached, waiting for centering");
     }
 
-    if ((wp_nav->reached_wp_destination() && elapsed > 1500) || (elapsed >= TARGET_APPROACH_WAIT_MS)) {
+    if (wp_nav->reached_wp_destination() || (elapsed >= TARGET_APPROACH_WAIT_MS)) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: approach wait done, centering");
         _smooth_vx = 0.0f;
         _smooth_vy = 0.0f;
         _hold_point_neu.zero();
         _target_vel_neu.zero();
         _accel_cmd.zero();
-        posvelaccel_control_start();
-        // pva_control_start();
+        last_tar_up = AP_HAL::millis();
         _phase = RescuePhase::CENTERING;
-        // _phase = RescuePhase::GUIDED;
     }
 }
 
@@ -566,53 +575,24 @@ void ModeRescue::target_approach_run()
 // ---------------------------------------------------------------------------
 void ModeRescue::centering_run()
 {
-    _target_vel_neu.zero();
     if (is_disarmed_or_landed()) {
         make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
         return;
     }
 
     const uint32_t now = AP_HAL::millis();
-    float vx = 0.0f;
-    float vy = 0.0f;
-
-    if (_target_px_valid) {
+    
+    if (_target_px_valid && now - last_tar_up > 33) {
+        last_tar_up = now;
+        float vx = 0.0f;
+        float vy = 0.0f;
+        const float vz = 0.3f;
         compute_centering_velocity(vx, vy);
+        _target_vel_neu = Vector3f{vx, vy, -vz};
+        _target_vel_neu.xy() = copter.ahrs.body_to_earth2D(_target_vel_neu.xy());
     }
-
-    const float vz = 0.3f;
-
-    _target_vel_neu = Vector3f{vx, vy, -vz};
-    _target_vel_neu.xy() = copter.ahrs.body_to_earth2D(_target_vel_neu.xy());
-
-    // set motors to full range
-    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-
-
-    bool do_avoid = false;
-
-    // update position controller with new target
-
-    if (!stabilizing_vel_NE() && !do_avoid) {
-        // set the current commanded xy vel to the desired vel
-        _target_vel_neu.xy() = pos_control->get_vel_desired_NEU_ms().xy();
-    }
-    pos_control->input_vel_accel_NE_m(_target_vel_neu.xy(), _accel_cmd.xy(), false);
-    if (!stabilizing_vel_NE() && !do_avoid) {
-        // set position and velocity errors to zero
-        pos_control->stop_vel_NE_stabilisation();
-    } else if (!stabilizing_pos_NE() && !do_avoid) {
-        // set position errors to zero
-        pos_control->stop_pos_NE_stabilisation();
-    }
-    pos_control->input_vel_accel_U_m(_target_vel_neu.z, _accel_cmd.z, false);
-
-    // call velocity controller which includes z axis controller
-    pos_control->update_NE_controller();
-    pos_control->update_U_controller();
-
-    // call attitude controller with auto yaw
-    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
+    set_vel_accel_NEU_m(_target_vel_neu, Vector3f(), true, 0.0f, false, 0.0f, true, false);
+    ModeGuided::run();
 
     float rel_alt = 0.0f;
 
@@ -679,6 +659,7 @@ void ModeRescue::compute_centering_velocity(float &vx_out, float &vy_out)
 void ModeRescue::deploying_run()
 {
     ModeGuided::run();
+    gimbal_point_down = true;
     if (AP_HAL::millis() - _deploy_time_ms > 5000) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: deploy done, dynamic landing");
         switch_to_dynamic_landing();
@@ -689,27 +670,12 @@ void ModeRescue::switch_to_dynamic_landing()
 {
     if (!copter.set_mode(Mode::Number::DYNAMIC_LANDING, ModeReason::MISSION_END)) {
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: failed to switch mode, entering GUIDED");
+        gimbal_point_down = true;
         _phase = RescuePhase::GUIDED;
         velaccel_control_start();
     }
 }
 
-// void ModeRescue::fire_lifebuoy_servos(bool deploy)
-// {
-//     const uint8_t ch[3] = {
-//         (uint8_t)(int16_t)g2.rescue.life_pwm_ch1,
-//         (uint8_t)(int16_t)g2.rescue.life_pwm_ch2,
-//         (uint8_t)(int16_t)g2.rescue.life_pwm_ch3
-//     };
-//     int pwm = deploy ? g2.rescue.life_deploy_pwm : g2.rescue.life_retract_pwm;
-    
-//     for (uint8_t i = 0; i < 3; i++) {
-//         SRV_Channels::set_output_pwm_chan_timeout(ch[i] - 1, pwm, 10000);
-//     }
-//     gcs().send_text(MAV_SEVERITY_INFO,
-//         "Rescue: servos ch%u=%u ch%u=%u ch%u=%u",
-//         ch[0], pwm, ch[1], pwm, ch[2], pwm);
-// }
 void ModeRescue::fire_lifebuoy_servos(bool deploy)
 {
     const uint16_t pwm = deploy ?
@@ -735,16 +701,9 @@ void ModeRescue::advance_to_next_wp()
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: WP %u/%u (%.1fm)", _current_idx + 1, _wp_count, (double)alt_m);
     } else {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: all %u WPs done, dynamic landing", _wp_count);
-        // test_pos_comm();
         _accel_cmd.zero();
         _target_vel_neu.zero();
         target_pos_neu.zero();
-        // _target_vel_neu = Vector3f{0.2f, 0.2f, 0.0f};
-        // _target_gps_loc.lat = -353641866;
-        // _target_gps_loc.lng = 1491658340;
-        // _target_gps_loc.set_alt_cm(1200, Location::AltFrame::ABOVE_HOME);
-        // dest_location(_target_gps_loc);
-        // _phase = RescuePhase::TEST;
         switch_to_dynamic_landing();
     }
 }
@@ -811,7 +770,6 @@ void ModeRescue::handle_lifebuoy(bool deploy)
         _lifebuoy_deployed = false;
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: lifebuoy retracted (manual)");
     }
-    // _phase = RescuePhase::DEPLOYING;
 }
 
 void ModeRescue::handle_insert_wp(int32_t lat_degE7, int32_t lon_degE7)
@@ -865,8 +823,6 @@ void ModeRescue::handle_start_search()
     _current_idx                = 0;
     _tracking_active            = false;
     _target_px_valid            = false;
-    // _target_px_last_ms          = 0;
-    // _detection_count            = 0;
     _detection_window_start_ms  = 0;
     _first_wp_reached           = false;
     _smooth_vx                  = 0.0f;
@@ -915,130 +871,4 @@ void ModeRescue::send_status()
             (_wp_count > 0) ? 1 : 0);
     }
 }
-void ModeRescue::test_pos_comm(){
-    target_pos_neu.zero();
-    target_pos_neu.x = 100;
-    Vector3p pos_ned_m;
-    if (!copter.ahrs.get_relative_position_NED_origin(pos_ned_m)) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: failed to get relative position");
-        return;
-    }
-    target_pos_neu.xy() += pos_ned_m.xy();
-    target_pos_neu.z -= pos_ned_m.z;
-    pva_control_start();
-
-}
-void ModeRescue::pos_run(){
-        // if not armed set throttle to zero and exit immediately
-    if (is_disarmed_or_landed()) {
-        // do not spool down tradheli when on the ground with motor interlock enabled
-        make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
-        return;
-    }
-
-    // calculate terrain adjustments
-    float terr_offset_m = 0.0f;
-
-    // set motors to full range
-    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-
-    // send position and velocity targets to position controller
-    _accel_cmd.zero();
-    _target_vel_neu.zero();
-
-    float pos_offset_z_buffer_m = 0.0; // Vertical buffer size in m
-
-    pos_control->input_pos_NEU_m(target_pos_neu, terr_offset_m, pos_offset_z_buffer_m);
-
-    // run position controllers
-    pos_control->update_NE_controller();
-    pos_control->update_U_controller();
-
-    // call attitude controller with auto yaw
-    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
-}
-void ModeRescue::vel_run()
-{
-    // if not armed set throttle to zero and exit immediately
-    if (is_disarmed_or_landed()) {
-        // do not spool down tradheli when on the ground with motor interlock enabled
-        make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
-        return;
-    }
-
-    // set motors to full range
-    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-
-
-    bool do_avoid = false;
-
-    // update position controller with new target
-
-    if (!stabilizing_vel_NE() && !do_avoid) {
-        // set the current commanded xy vel to the desired vel
-        _target_vel_neu.xy() = pos_control->get_vel_desired_NEU_ms().xy();
-    }
-    pos_control->input_vel_accel_NE_m(_target_vel_neu.xy(), _accel_cmd.xy(), false);
-    if (!stabilizing_vel_NE() && !do_avoid) {
-        // set position and velocity errors to zero
-        pos_control->stop_vel_NE_stabilisation();
-    } else if (!stabilizing_pos_NE() && !do_avoid) {
-        // set position errors to zero
-        pos_control->stop_pos_NE_stabilisation();
-    }
-    pos_control->input_vel_accel_U_m(_target_vel_neu.z, _accel_cmd.z, false);
-
-    // call velocity controller which includes z axis controller
-    pos_control->update_NE_controller();
-    pos_control->update_U_controller();
-
-    // call attitude controller with auto yaw
-    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
-}
-void ModeRescue::dest_location(Location &dest_loc)
-{
-    // initialise waypoint and spline controller
-    wp_nav->wp_and_spline_init_m();
-
-    // initialise wpnav to stopping point
-    Vector3p stopping_point_neu_m;
-    wp_nav->get_wp_stopping_point_NEU_m(stopping_point_neu_m);
-    if (!wp_nav->set_wp_destination_NEU_m(stopping_point_neu_m, false)) {
-        // this should never happen because terrain data is not used
-        INTERNAL_ERROR(AP_InternalError::error_t::flow_of_control);
-    }
-
-    // initialise yaw
-    auto_yaw.set_mode_to_default(false);
-    if (!wp_nav->set_wp_destination_loc(dest_loc)) {
-        // failure to set destination can only be because of missing terrain data
-        LOGGER_WRITE_ERROR(LogErrorSubsystem::NAVIGATION, LogErrorCode::FAILED_TO_SET_DESTINATION);
-        // failure is propagated to GCS with NAK
-    }
-
-    // set yaw state
-    set_yaw_state_rad(false, 0.0f, false, 0.0f, false);
-}
-void ModeRescue::waypoint_control_run()
-{
-    // if not armed set throttle to zero and exit immediately
-    if (is_disarmed_or_landed()) {
-        // do not spool down tradheli when on the ground with motor interlock enabled
-        make_safe_ground_handling(copter.is_tradheli() && motors->get_interlock());
-        return;
-    }
-
-    // set motors to full range
-    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
-
-    // run waypoint controller
-    copter.failsafe_terrain_set_status(wp_nav->update_wpnav());
-
-    // call z-axis position controller (wpnav should have already updated it's alt target)
-    pos_control->update_U_controller();
-
-    // call attitude controller with auto yaw
-    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
-}
-
 #endif // MODE_RESCUE_ENABLED
