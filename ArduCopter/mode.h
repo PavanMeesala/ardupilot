@@ -1264,7 +1264,7 @@ protected:
     const char *name4() const override { return "RESC"; }
 
 private:
-    static constexpr uint8_t  RESCUE_WP_MAX             = 32;
+    static constexpr uint8_t  RESCUE_WP_MAX             = 200;
     static constexpr float    CENTER_PX_SCALE            = 0.01f;
     static constexpr float    CENTER_ALPHA               = 0.05f;
     static constexpr uint32_t STATUS_INTERVAL_MS         = 1000;
@@ -1290,6 +1290,7 @@ private:
     };
 
     Location _waypoints[RESCUE_WP_MAX];
+    float    _waypoint_yaw[RESCUE_WP_MAX];   // radians, matches _waypoints[] index-for-index
     uint8_t  _wp_count{0};
     uint16_t _expected_count{0};
     uint8_t  _current_idx{0};
@@ -1329,13 +1330,13 @@ private:
     Vector3f _target_vel_neu{0.0f, 0.0f, 0.0f};
     Vector3f _accel_cmd{0.0f, 0.0f, 0.0f};
     uint32_t _target_approach_start_ms{0};
+    uint32_t last_update_ms{0};
 
     float    _smooth_vx{0.0f};
     float    _smooth_vy{0.0f};
 
     bool     _lifebuoy_deployed{false};
     uint32_t _deploy_time_ms{0};
-    // bool     _manual_deploy{false};
 
     bool     _beacon_valid{false};
     uint32_t _beacon_last_ms{0};
@@ -1348,12 +1349,29 @@ private:
 
     uint32_t _last_status_ms{0};
 
+    // dynamic pattern
+    static constexpr uint8_t  HOME_HIST_MAX = 101;
+    static constexpr uint16_t TRAJ_N        = 1000;
+    static constexpr float    BEACON_MOVE_MIN_M = 10.0f;  // TODO: promote to AP_Rescue_Params (RESC_BCN_MIN) if you want it GCS-tunable
+
+    Location _home_hist[HOME_HIST_MAX];
+    uint8_t  _home_hist_count = 0;
+    float    _home_log_step_m = 1.0f;   // set from GENERATE_WPS length_m/100
+
+    bool     beacon_track_valid() const;
+    void     log_home_history_point(float lat, float lon);
+    uint16_t build_home_trajectory_raw(Vector2f *traj_raw, float *cum_dist_raw, float &base_lat, float &base_lon);
+    uint16_t build_straight_trajectory_raw(float total_dist_m, Vector2f *traj_raw, float *cum_dist_raw, float &base_lat, float &base_lon);
+    void     interp_trajectory(const Vector2f *traj_raw, const float *cum_dist_raw, uint16_t n_raw, Vector2f *traj_out, uint16_t n_out);
+
+    // dynamic pattern end
+
     void apply_nav_alt(Location &loc) const;
     bool generate_lawn_pattern(float total_dist_m);
     void echo_wps_to_gcs();
     void send_current_route_to_gcs();
-    bool wp_nav_set_destination(const Location &dest);
-    bool wp_nav_set_destination_insert(const Location &dest);
+    bool wp_nav_set_destination(const Location &dest, float yaw_rad);
+    bool wp_nav_set_destination_insert(const Location &dest, float yaw_rad);
     void advance_to_next_wp();
     void notify_wp_reached(uint8_t idx);
     void set_hold_point();
@@ -1375,7 +1393,6 @@ private:
     void deploying_run();
     void get_gimbal_rad();
 };
-
 class ModeDynamicLanding : public ModeGuided {
 public:
     using ModeGuided::Mode;

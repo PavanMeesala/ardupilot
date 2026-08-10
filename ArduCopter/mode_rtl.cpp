@@ -154,7 +154,8 @@ void ModeRTL::return_start()
     }
 
     // initialise yaw to point home (maybe)
-    auto_yaw.set_mode_to_default(true);
+    // auto_yaw.set_mode_to_default(true);
+    auto_yaw.set_mode(AutoYaw::Mode::LOOK_AHEAD);
 }
 
 // rtl_climb_return_run - implements the initial climb, return home and descent portions of RTL which all rely on the wp controller

@@ -12,11 +12,7 @@ public:
 
     // Navigation
     AP_Int16 nav_alt;
-    AP_Int16 wp_thr;
-    AP_Int16 wp_thr_end;
     AP_Int16 dyn_tar_thr;
-    AP_Float pos_msg_rate;
-    AP_Float vel_msg_rate;
     AP_Float stop_acc;
     AP_Int16 max_stop_dis;
     AP_Int16 miss_timeout;
@@ -37,9 +33,6 @@ public:
     AP_Int16 mar_det_thr;
     AP_Float mot_cutoff_thr;
 
-    // Logging
-    AP_Float log_int;
-
     // Gimbal
     AP_Float gmb_msg_rate;
     AP_Float gmb_hfov;
@@ -48,8 +41,6 @@ public:
     AP_Int16 gmb_cam_wid;
     AP_Int16 gmb_cam_hgt;
 
-    AP_Float gmb_cntr_smth;
-
     AP_Int16 gmb_pit_poi;
     AP_Int16 gmb_yaw_poi;
 
@@ -57,10 +48,6 @@ public:
     AP_Int16 gmb_yaw_cor;
 
     // Detection
-    AP_Float det_cnf_thr;
-    AP_Int16 det_win_dur;
-    AP_Int16 min_det_track;
-    AP_Int16 min_det_track_int;
     AP_Int16 track_timeout;
 
     // Sensor
@@ -75,14 +62,11 @@ public:
     AP_Int16 life_retract_pwm;
 
     AP_Float life_dep_alt;
-    AP_Float hfov;
-    AP_Float search_dist;
     AP_Float overlap;
-    AP_Float lookahead_fac;
-    AP_Float life_deploy_alt;
-    AP_Float center_max_spd;
-    AP_Float center_dz;
-    AP_Float marker_timeout;
-    AP_Float land_dz;
-    AP_Float motor_cutoff_alt;
-};
+    AP_Int8 beacon_avl;
+    AP_Float wind_mps;
+    AP_Float act_dist_m;
+    AP_Int8  wp_skip;
+    AP_Float max_path_dist;
+    
+    };

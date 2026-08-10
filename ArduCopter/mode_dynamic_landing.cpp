@@ -292,6 +292,10 @@ void ModeDynamicLanding::handle_home_beacon_gps(int32_t lat, int32_t lon,
     _beacon.heading = heading;
     _beacon.v_north = v_north;
     _beacon.v_east  = v_east;
+    for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+        mavlink_msg_home_beacon_gps_send(gcs().chan(c)->get_chan(),
+            lat,lon,heading,v_north,v_east);
+    }
     _beacon.last_ms = AP_HAL::millis();
     _beacon.valid   = true;
     update_beacon_lookahead();

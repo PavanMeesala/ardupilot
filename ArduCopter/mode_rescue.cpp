@@ -10,7 +10,6 @@ bool ModeRescue::init(bool ignore_checks)
     _current_idx                = 0;
     _phase                      = RescuePhase::IDLE;
     _wpnav_initialised          = false;
-    _wps_from_generate          = false;
     _has_inserted_wp            = false;
     _mission_start_ms           = 0;
     _target_dx                  = 0;
@@ -25,6 +24,7 @@ bool ModeRescue::init(bool ignore_checks)
     _smooth_vy                  = 0.0f;
     _lifebuoy_deployed          = false;
     _deploy_time_ms             = 0;
+     _home_log_step_m = (float)g2.rescue.max_path_dist / (float)(HOME_HIST_MAX - 1);
     gimbal_last_update_ms = AP_HAL::millis();
 
     if (!ModeGuided::init(ignore_checks)) {
@@ -97,6 +97,128 @@ void ModeRescue::apply_nav_alt(Location &loc) const
     }
 }
 
+static float home_hist_distance_m(float lat1, float lon1, float lat2, float lon2)
+{
+    const float R = 6378137.0f;
+    const float lat1_r = radians(lat1);
+    const float lat2_r = radians(lat2);
+    const float dlat   = radians(lat2 - lat1);
+    const float dlon   = radians(lon2 - lon1);
+    const float a = sinf(dlat*0.5f)*sinf(dlat*0.5f) +
+                    cosf(lat1_r)*cosf(lat2_r)*sinf(dlon*0.5f)*sinf(dlon*0.5f);
+    const float c = 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
+    return R * c;
+}
+
+void ModeRescue::log_home_history_point(float lat, float lon)
+{
+    if (_home_hist_count > 0) {
+        const Location &last = _home_hist[_home_hist_count - 1];
+        const float dist_m = home_hist_distance_m(last.lat*1e-7f, last.lng*1e-7f, lat, lon);
+        const float threshold_m = MAX(1.0f, _home_log_step_m);
+        if (dist_m < threshold_m || dist_m > 1000.0f) {
+            return;
+        }
+    }
+
+    Location newloc{};
+    newloc.lat = (int32_t)(lat * 1e7f);
+    newloc.lng = (int32_t)(lon * 1e7f);
+
+    if (_home_hist_count < HOME_HIST_MAX) {
+        _home_hist[_home_hist_count++] = newloc;
+    } else {
+        for (uint8_t i = 0; i < HOME_HIST_MAX - 1; i++) {
+            _home_hist[i] = _home_hist[i + 1];
+        }
+        _home_hist[HOME_HIST_MAX - 1] = newloc;
+    }
+
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: beacon fix logged, count=%u", (unsigned)_home_hist_count);
+}
+
+bool ModeRescue::beacon_track_valid() const
+{
+    if (_home_hist_count < 2) {
+        return false;
+    }
+    const float oldest_lat = _home_hist[0].lat * 1e-7f;
+    const float oldest_lon = _home_hist[0].lng * 1e-7f;
+    const float newest_lat = _home_hist[_home_hist_count - 1].lat * 1e-7f;
+    const float newest_lon = _home_hist[_home_hist_count - 1].lng * 1e-7f;
+    const float moved_m = home_hist_distance_m(oldest_lat, oldest_lon, newest_lat, newest_lon);
+    return moved_m >= BEACON_MOVE_MIN_M;
+}
+
+uint16_t ModeRescue::build_home_trajectory_raw(Vector2f *traj_raw, float *cum_dist_raw,
+                                                float &base_lat, float &base_lon)
+{
+    base_lat = _home_hist[0].lat * 1e-7f;      
+    base_lon = _home_hist[0].lng * 1e-7f;
+    const float R = 6378137.0f;
+    const float lat0_rad = radians(base_lat);
+    const uint16_t n = _home_hist_count;
+
+    for (uint16_t i = 0; i < n; i++) {
+        const Location &p = _home_hist[n - 1 - i]; 
+        const float lat = p.lat * 1e-7f;
+        const float lon = p.lng * 1e-7f;
+        traj_raw[i].x = radians(lat - base_lat) * R;
+        traj_raw[i].y = radians(lon - base_lon) * R * cosf(lat0_rad);
+    }
+    cum_dist_raw[0] = 0.0f;
+    for (uint16_t i = 1; i < n; i++) {
+        cum_dist_raw[i] = cum_dist_raw[i - 1] + (traj_raw[i] - traj_raw[i - 1]).length();
+    }
+    return n;
+}
+
+uint16_t ModeRescue::build_straight_trajectory_raw(float total_dist_m, Vector2f *traj_raw, float *cum_dist_raw,
+                                                    float &base_lat, float &base_lon)
+{
+    const float cur_lat = copter.current_loc.lat * 1e-7f;
+    const float cur_lon = copter.current_loc.lng * 1e-7f;
+    const float hdg_rad = radians(copter.ahrs.yaw_sensor * 0.01f);
+    const float R       = 6378137.0f;
+    const float fwd_n   = cosf(hdg_rad);
+    const float fwd_e   = sinf(hdg_rad);
+    const float lat_rad = radians(cur_lat);
+
+    base_lat = cur_lat + degrees((total_dist_m * fwd_n) / R);
+    base_lon = cur_lon + degrees((total_dist_m * fwd_e) / (R * cosf(lat_rad)));
+
+    const uint16_t n = HOME_HIST_MAX;
+    for (uint16_t i = 0; i < n; i++) {
+        const float frac = (float)i / (float)(n - 1);              // 0=current, 1=far
+        const float dist_from_far = total_dist_m * (frac - 1.0f);  // <= 0
+        traj_raw[i].x = dist_from_far * fwd_n;
+        traj_raw[i].y = dist_from_far * fwd_e;
+    }
+    cum_dist_raw[0] = 0.0f;
+    for (uint16_t i = 1; i < n; i++) {
+        cum_dist_raw[i] = cum_dist_raw[i - 1] + (traj_raw[i] - traj_raw[i - 1]).length();
+    }
+    return n;
+}
+
+void ModeRescue::interp_trajectory(const Vector2f *traj_raw, const float *cum_dist_raw,
+                                    uint16_t n_raw, Vector2f *traj_out, uint16_t n_out)
+{
+    const float total_len = cum_dist_raw[n_raw - 1];
+
+    for (uint16_t j = 0; j < n_out; j++) {
+        const float target = total_len * ((float)j / (float)(n_out - 1));
+
+        uint16_t seg = 0;
+        while (seg < n_raw - 2 && cum_dist_raw[seg + 1] < target) {
+            seg++;
+        }
+        const float seg_len = cum_dist_raw[seg + 1] - cum_dist_raw[seg];
+        const float t = (seg_len > 1e-6f) ? constrain_float((target - cum_dist_raw[seg]) / seg_len, 0.0f, 1.0f) : 0.0f;
+        traj_out[j] = traj_raw[seg] + (traj_raw[seg + 1] - traj_raw[seg]) * t;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // generate_lawn_pattern
 // ---------------------------------------------------------------------------
@@ -104,63 +226,230 @@ bool ModeRescue::generate_lawn_pattern(float total_dist_m)
 {
     const float alt_m    = (float)g2.rescue.nav_alt;
     const float hfov_rad = radians((float)g2.rescue.gmb_hfov);
-    const float overlap  = 0.2f;
-    const float strip_w  = 2.0f * alt_m * tanf(hfov_rad * 0.5f) * (1.0f - overlap);
+    // const float overlap  = 0.2f;
+    const float overlap = (float)g2.rescue.overlap;
+    const float ground_width = 2.0f * alt_m * tanf(hfov_rad * 0.5f) * (1.0f - overlap);
 
-    if (strip_w < 0.5f || total_dist_m < 10.0f) {
+    if (ground_width < 0.5f || total_dist_m < 10.0f) {
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: pattern params invalid");
         return false;
     }
 
-    const int   n_pairs   = MAX(1, (int)(total_dist_m / strip_w));
-    const float start_lat = copter.current_loc.lat * 1e-7f;
-    const float start_lon = copter.current_loc.lng * 1e-7f;
-    const float hdg_rad   = radians(copter.ahrs.yaw_sensor * 0.01f);
-    const float fwd_n     = cosf(hdg_rad);
-    const float fwd_e     = sinf(hdg_rad);
-    const float lshift_n  = fwd_e;
-    const float lshift_e  = -fwd_n;
-    const float max_hw    = total_dist_m * 0.5f;
-    const float R         = 6378137.0f;
-    const float lat0_rad  = radians(start_lat);
+    static Vector2f traj_raw[HOME_HIST_MAX + 1];
+    static float    cum_dist_raw[HOME_HIST_MAX + 1];
+    float base_lat, base_lon;
+    uint16_t n_raw;
+
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: home_hist_count=%u", (unsigned)_home_hist_count);
+
+    if (beacon_track_valid()) {
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: using beacon track");
+        n_raw = build_home_trajectory_raw(traj_raw, cum_dist_raw, base_lat, base_lon);
+
+        const float known_span_m = cum_dist_raw[n_raw - 1];
+
+        if (total_dist_m > known_span_m && n_raw >= 2) {
+            const float extra_dist = total_dist_m - known_span_m;
+
+            Vector2f tangent = traj_raw[n_raw - 1] - traj_raw[n_raw - 2];
+            const float tnorm = tangent.length();
+            if (tnorm > 1e-3f) {
+                tangent /= tnorm;
+            } else {
+                tangent = Vector2f{1.0f, 0.0f};
+            }
+
+            traj_raw[n_raw] = traj_raw[n_raw - 1] + tangent * extra_dist;
+            cum_dist_raw[n_raw] = cum_dist_raw[n_raw - 1] + extra_dist;
+            n_raw++;
+
+            gcs().send_text(MAV_SEVERITY_INFO, "Rescue: extended +%.0fm beyond known track", (double)extra_dist);
+        }
+    } else {
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: no valid beacon, straight line");
+        n_raw = build_straight_trajectory_raw(total_dist_m, traj_raw, cum_dist_raw, base_lat, base_lon);
+    }
+
+    if (n_raw < 2 || cum_dist_raw[n_raw - 1] < 1.0f) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: track too short");
+        return false;
+    }
+
+    const float max_distance_actual = cum_dist_raw[n_raw - 1];
+
+    static Vector2f trajectory[TRAJ_N];
+    interp_trajectory(traj_raw, cum_dist_raw, n_raw, trajectory, TRAJ_N);
+
+    const int num_pairs = MAX(1, (int)(max_distance_actual / ground_width));
+    const float wind_mps   = (float)g2.rescue.wind_mps;
+    const float max_offset = (max_distance_actual / 100.0f) * 0.6f * wind_mps;
+
+    const uint16_t max_idx = TRAJ_N - 2;
+    const float R = 6378137.0f;
+    const float lat0_rad = radians(base_lat);
 
     auto ne_to_loc = [&](float north_m, float east_m) -> Location {
         Location loc{};
-        loc.lat = (int32_t)((start_lat + degrees(north_m / R)) * 1e7f);
-        loc.lng = (int32_t)((start_lon + degrees(east_m / (R * cosf(lat0_rad)))) * 1e7f);
+        loc.lat = (int32_t)((base_lat + degrees(north_m / R)) * 1e7f);
+        loc.lng = (int32_t)((base_lon + degrees(east_m / (R * cosf(lat0_rad)))) * 1e7f);
         loc.alt = 0;
         loc.relative_alt = false;
+        apply_nav_alt(loc);
         return loc;
     };
 
-    _wp_count = _expected_count = 0;
+    auto zigzag_index = [&](int k) -> uint16_t {
+        if (num_pairs <= 1) return 0;
+        return (uint16_t)((float)k * (float)max_idx / (float)(num_pairs - 1));
+    };
 
-    for (int k = 0; k < n_pairs && _wp_count < (int)RESCUE_WP_MAX - 1; k++) {
-        const float frac     = (n_pairs > 1) ? (float)k / (float)(n_pairs - 1) : 0.5f;
-        const float fwd_dist = total_dist_m * frac;
-        const float half_w   = max_hw * frac;
-        const float ctr_n    = fwd_dist * fwd_n;
-        const float ctr_e    = fwd_dist * fwd_e;
-        Location left_wp  = ne_to_loc(ctr_n + half_w * lshift_n, ctr_e + half_w * lshift_e);
-        Location right_wp = ne_to_loc(ctr_n - half_w * lshift_n, ctr_e - half_w * lshift_e);
+    const float TANGENT_BASELINE_M = 20.0f;
+    const uint16_t tangent_stride = (uint16_t)MAX(1.0f, (TANGENT_BASELINE_M / max_distance_actual) * (float)TRAJ_N * 0.5f);
+
+    // sample_lr now also returns the raw (north,east) offsets for each side,
+    // needed downstream to compute yaw (bearing between consecutive points)
+    auto sample_lr = [&](uint16_t idx, Vector2f &left_ne, Vector2f &right_ne) {
+        const uint16_t lo = (idx >= tangent_stride) ? (idx - tangent_stride) : 0;
+        const uint16_t hi = MIN((uint16_t)(idx + tangent_stride), (uint16_t)(TRAJ_N - 1));
+
+        Vector2f dir = trajectory[hi] - trajectory[lo];
+        float norm = dir.length();
+        if (norm < 1e-6f) norm = 1e-6f;
+        const float lshift_n = -dir.y / norm;
+        const float lshift_e =  dir.x / norm;
+        const float offset = max_offset * ((float)idx / (float)max_idx);
+
+        left_ne  = Vector2f{trajectory[idx].x + offset * lshift_n, trajectory[idx].y + offset * lshift_e};
+        right_ne = Vector2f{trajectory[idx].x - offset * lshift_n, trajectory[idx].y - offset * lshift_e};
+    };
+
+    // Build raw NE points + side markers first (mirrors python's points_2d/sides),
+    // then convert to Location + compute yaw in a second pass.
+    static Vector2f raw_points[2 * RESCUE_WP_MAX];
+    static int8_t   raw_sides[2 * RESCUE_WP_MAX];
+    uint16_t raw_count = 0;
+
+    for (int k = 0; k < num_pairs && raw_count < (uint16_t)(2 * RESCUE_WP_MAX - 1); k++) {
+        Vector2f left_ne, right_ne;
+        sample_lr(zigzag_index(k), left_ne, right_ne);
+
         if (k % 2 == 0) {
-            _waypoints[_wp_count++] = right_wp;
-            if (_wp_count >= RESCUE_WP_MAX) break;
-            _waypoints[_wp_count++] = left_wp;
+            raw_points[raw_count] = right_ne; raw_sides[raw_count] = 1; raw_count++;
+            if (raw_count >= 2 * RESCUE_WP_MAX) break;
+            raw_points[raw_count] = left_ne;  raw_sides[raw_count] = 1; raw_count++;
         } else {
-            _waypoints[_wp_count++] = left_wp;
-            if (_wp_count >= RESCUE_WP_MAX) break;
-            _waypoints[_wp_count++] = right_wp;
+            raw_points[raw_count] = left_ne;  raw_sides[raw_count] = -1; raw_count++;
+            if (raw_count >= 2 * RESCUE_WP_MAX) break;
+            raw_points[raw_count] = right_ne; raw_sides[raw_count] = -1; raw_count++;
         }
     }
 
+    _wp_count = _expected_count = 0;
+
+    for (uint16_t i = 0; i < raw_count && _wp_count < RESCUE_WP_MAX; i++) {
+        _waypoints[_wp_count] = ne_to_loc(raw_points[i].x, raw_points[i].y);
+
+        if (i == 0) {
+            _waypoint_yaw[_wp_count] = 0.0f;
+        } else {
+            const float dx = raw_points[i].x - raw_points[i - 1].x;
+            const float dy = raw_points[i].y - raw_points[i - 1].y;
+            const float bearing = wrap_360(degrees(atan2f(dy, dx)));
+
+            if (raw_sides[i] == raw_sides[i - 1]) {
+                _waypoint_yaw[_wp_count] = radians(wrap_360(bearing - 90.0f * raw_sides[i]));
+            } else {
+                _waypoint_yaw[_wp_count] = radians(bearing);
+            }
+        }
+        _wp_count++;
+    }
+
+    const float   skip_len_m = (float)g2.rescue.act_dist_m;
+    const uint8_t skip_no    = (uint8_t)g2.rescue.wp_skip;
+
+    if (_wp_count > 0 && skip_len_m > 0.0f) {
+
+        const Location first_wp = _waypoints[0];
+        uint16_t kept = 0;
+
+        for (uint16_t i = 0; i < _wp_count; i++) {
+            const float d = first_wp.get_distance(_waypoints[i]);
+            if (d >= skip_len_m) {
+                _waypoints[kept]    = _waypoints[i];
+                _waypoint_yaw[kept] = _waypoint_yaw[i];
+                kept++;
+            }
+        }
+        _wp_count = kept;
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: skip_len=%.0fm applied, kept=%u", (double)skip_len_m, (unsigned)_wp_count);
+
+    } else if (_wp_count > 0 && skip_no > 0 && skip_no < _wp_count) {
+
+        const uint16_t remaining = _wp_count - skip_no;
+        for (uint16_t i = 0; i < remaining; i++) {
+            _waypoints[i]    = _waypoints[i + skip_no];
+            _waypoint_yaw[i] = _waypoint_yaw[i + skip_no];
+        }
+        _wp_count = remaining;
+        gcs().send_text(MAV_SEVERITY_INFO, "Rescue: skip_no=%u applied, kept=%u", (unsigned)skip_no, (unsigned)_wp_count);
+
+    } else if (_wp_count > 0 && skip_no >= _wp_count) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: skip_no >= wp_count, ignoring skip");
+    }
+
     _expected_count = _wp_count;
-    gcs().send_text(MAV_SEVERITY_INFO,
-        "Rescue: %u WPs, hdg=%.0f deg, len=%.0fm", _wp_count,
-        (double)(copter.ahrs.yaw_sensor * 0.01f), (double)total_dist_m);
+    gcs().send_text(MAV_SEVERITY_INFO, "Rescue: %u WPs, pairs=%d len=%.0fm", _wp_count, num_pairs, (double)max_distance_actual);
     return _wp_count > 0;
 }
 
+void ModeRescue::handle_generate_wps(uint16_t length_m)
+{
+    if (copter.flightmode != this) return;
+
+    const bool safe_to_regenerate =
+        (_phase == RescuePhase::IDLE) ||
+        (_phase == RescuePhase::WPS_GENERATED) ||
+        (_phase == RescuePhase::TAKEOFF) ||
+        (copter.ap.land_complete && !motors->armed());
+
+    if (!safe_to_regenerate) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: cannot regenerate mid-flight, land/disarm first");
+        return;
+    }
+    if (copter.current_loc.lat == 0 && copter.current_loc.lng == 0) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: no GPS fix");
+        return;
+    }
+
+    // _home_log_step_m = (float)length_m / (float)(HOME_HIST_MAX - 1);
+    _wp_count          = _expected_count = 0;
+    _current_idx       = 0;
+    _wps_from_generate = true;
+
+    if (!generate_lawn_pattern((float)length_m)) {
+        _phase = RescuePhase::IDLE;
+        _wps_from_generate = false;
+        return;
+    }
+    echo_wps_to_gcs();
+    _phase = RescuePhase::WPS_GENERATED;
+    _last_status_ms = 0;
+    send_status();
+}
+
+void ModeRescue::handle_home_beacon_gps(int32_t lat, int32_t lon, float heading, float v_north, float v_east)
+{
+    _beacon_lat     = lat * 1e-7f;
+    _beacon_lon     = lon * 1e-7f;
+    for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
+        mavlink_msg_home_beacon_gps_send(gcs().chan(c)->get_chan(),
+            lat,lon,heading,v_north,v_east);
+    }
+    _beacon_last_ms = AP_HAL::millis();
+    _beacon_valid   = true;
+    log_home_history_point(_beacon_lat, _beacon_lon);
+}
 void ModeRescue::echo_wps_to_gcs()
 {
     for (uint8_t i = 0; i < _wp_count; i++) {
@@ -173,7 +462,7 @@ void ModeRescue::echo_wps_to_gcs()
         "Rescue: sent %u WPs to GCS, awaiting START_SEARCH", _wp_count);
 }
 
-bool ModeRescue::wp_nav_set_destination(const Location &dest)
+bool ModeRescue::wp_nav_set_destination(const Location &dest, float yaw_rad)
 {
     if (!_wpnav_initialised) {
         Vector3p origin_neu_m;
@@ -194,17 +483,17 @@ bool ModeRescue::wp_nav_set_destination(const Location &dest)
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: failed to set WP destination");
         return false;
     }
-    auto_yaw.set_mode_to_default(false);
+    set_yaw_state_rad(true, yaw_rad, false, 0.0f, false);
     return true;
 }
 
-bool ModeRescue::wp_nav_set_destination_insert(const Location &dest)
+bool ModeRescue::wp_nav_set_destination_insert(const Location &dest, float yaw_rad)
 {
     if (!wp_nav->set_wp_destination_loc(dest)) {
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: failed to set INSERT WP destination");
         return false;
     }
-    auto_yaw.set_mode_to_default(false);
+    set_yaw_state_rad(true, yaw_rad, false, 0.0f, false);
     return true;
 }
 
@@ -232,7 +521,7 @@ void ModeRescue::taking_off_run()
         _phase = RescuePhase::WP_NAV;
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
-        if (!wp_nav_set_destination(dest)) {
+        if (!wp_nav_set_destination(dest, _waypoint_yaw[_current_idx])) {
             set_destination(copter.current_loc);
             return;
         }
@@ -260,15 +549,18 @@ void ModeRescue::wp_nav_run()
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: hold point (dx=%.1f dy=%.1f)",
                 (double)_hold_point_neu.x, 
                 (double)_hold_point_neu.y);
+        set_pos_NEU_m(_hold_point_neu, true, 0.0f, false, 0.0f, true, false);
         _hold_point_start_ms = AP_HAL::millis();
         _phase = RescuePhase::HOLD_POINT;
+        last_update_ms = now;
         return;
     }
 
     if (_has_inserted_wp) {
         Location dest = _inserted_wp;
         apply_nav_alt(dest);
-        if (wp_nav_set_destination_insert(dest)) {
+        const float yaw_to_insert = radians(copter.current_loc.get_bearing_to(dest) * 0.01f);
+        if (wp_nav_set_destination_insert(dest, yaw_to_insert)) {
             gcs().send_text(MAV_SEVERITY_INFO, "Rescue: navigating to inserted WP");
             _phase = RescuePhase::INSERT_NAV;
         }
@@ -323,7 +615,9 @@ void ModeRescue::insert_nav_run()
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: hold point (dx=%.1f dy=%.1f)",
                 (double)_hold_point_neu.x, 
                 (double)_hold_point_neu.y);
+        set_pos_NEU_m(_hold_point_neu, true, 0.0f, false, 0.0f, true, false);
         _hold_point_start_ms = AP_HAL::millis();
+        last_update_ms = now;
         _phase = RescuePhase::HOLD_POINT;
         return;
     }
@@ -347,8 +641,9 @@ void ModeRescue::insert_nav_run()
         _has_inserted_wp = false;
         _phase = RescuePhase::WP_NAV;
         Location dest = _waypoints[_current_idx];
+        const float yaw_to_insert = radians(copter.current_loc.get_bearing_to(dest) * 0.01f);
         apply_nav_alt(dest);
-        wp_nav_set_destination_insert(dest);
+        wp_nav_set_destination_insert(dest, yaw_to_insert);
     }
 }
 /// ---------------------------------------------------------------------------
@@ -394,8 +689,6 @@ void ModeRescue::set_hold_point()
 // ---------------------------------------------------------------------------
 void ModeRescue::hold_point_run()
 {
-    ModeGuided::run();
-    gcs().send_text(MAV_SEVERITY_INFO, "hold point run go to target dx dy.");
     const uint32_t now    = AP_HAL::millis();
     const uint32_t waited = now - _hold_point_start_ms;
 
@@ -406,11 +699,12 @@ void ModeRescue::hold_point_run()
             (int)_target_dx, (int)_target_dy);
         _target_gps_loc.zero();
         if (calculate_target_location()) {
-            set_destination(_target_gps_loc, false, 0.0f, false, 0.0f);
+            gcs().send_text(MAV_SEVERITY_INFO,"Rescue: Navigating to target location");
+            set_destination(_target_gps_loc, true, 0.0f, false, 0.0f,true);
         }
         _phase = RescuePhase::TARGET_APPROACH;
         _target_approach_start_ms = now;
-        
+        last_update_ms = now;
         return;
     }
 
@@ -427,16 +721,24 @@ void ModeRescue::hold_point_run()
         }
         gimbal_point_down = false;
         Location dest;
+        float yaw_rad;
         if (_has_inserted_wp) {
             dest = _inserted_wp;
+            yaw_rad = radians(copter.current_loc.get_bearing_to(dest) * 0.01f);
             _phase = RescuePhase::INSERT_NAV;
         }else{
             dest = _waypoints[_current_idx];
+            yaw_rad = _waypoint_yaw[_current_idx];
             _phase = RescuePhase::WP_NAV;
         }
         apply_nav_alt(dest);
-        wp_nav_set_destination_insert(dest);
+        wp_nav_set_destination_insert(dest, yaw_rad);
     }
+    if(now - last_update_ms > 33){
+        set_pos_NEU_m(_hold_point_neu, true, 0.0f, false, 0.0f, true, false);
+        last_update_ms = now;
+    }
+    ModeGuided::run();
 }
 void ModeRescue::get_gimbal_rad(){
     mount->get_attitude_euler(0, gimbal_roll_rad, gimbal_pitch_rad, gimbal_yaw_rad);
@@ -460,8 +762,7 @@ void ModeRescue::gimbal_control()
         first = false;
     }
 
-    if (now - gimbal_last_update_ms > 50){
-        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch deg=%.3f", (double)gimbal_pitch_tar);
+    if (now - gimbal_last_update_ms > (float)(1/g2.rescue.gmb_msg_rate)){
         gimbal_last_update_ms = now;
         if (gimbal_point_down){
             gimbal_pitch_cmd = -90;
@@ -472,13 +773,10 @@ void ModeRescue::gimbal_control()
             if (! isnan(_target_dx) ){
                 float dx_norm{0.0f};
                 float dy_norm{0.0f};
-                // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal dx=%.3f, dy=%.3f", (double)_target_dx, (double)_target_dy);
                 dx_norm = (float)_target_dx / (g2.rescue.gmb_cam_wid / 2);
                 dy_norm = (float)_target_dy / (g2.rescue.gmb_cam_hgt / 2);
-                // gcs().send_text(MAV_SEVERITY_INFO,"dxn=%.4f dyn=%.4f",(double)dx_norm,(double)dy_norm);
                 yaw_adjust = dx_norm * (g2.rescue.gmb_hfov / 2);
                 pitch_adjust = -dy_norm * (g2.rescue.gmb_vfov / 2);
-                // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch adjust det=%.3f", (double)pitch_adjust);
             }else{
                 yaw_adjust = 0;
                 pitch_adjust = 0; 
@@ -493,13 +791,7 @@ void ModeRescue::gimbal_control()
             gimbal_pitch_cmd = g2.rescue.gmb_pit_poi;
             gimbal_yaw_cmd = g2.rescue.gmb_yaw_poi;
         }
-        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch deg=%.3f", (double)gimbal_pitch_cmd);
-        // uint8_t instance, float roll_deg, float pitch_deg, float yaw_deg, bool yaw_is_earth_frame
-        // yaw_is_earth_frame (aka yaw_lock) should be true if yaw angle is earth-frame, false if body-frame
         mount->set_angle_target(0.0f, gimbal_pitch_cmd, gimbal_yaw_cmd, false);
-
-        // gcs().send_text(MAV_SEVERITY_INFO, "Rescue: gimbal pitch=%.3f, yaw=%.3f", (double)gimbal_pitch_tar, (double)gimbal_pitch_tar);
-
     }
 }
 // ---------------------------------------------------------------------------
@@ -548,11 +840,8 @@ bool ModeRescue::calculate_target_location()
 // ---------------------------------------------------------------------------
 void ModeRescue::target_approach_run()
 {
-    ModeGuided::run();
-    gcs().send_text(MAV_SEVERITY_INFO, "go to target gps.");
     const uint32_t now     = AP_HAL::millis();
     const uint32_t elapsed = now - _target_approach_start_ms;
-    
     
     if (wp_nav->reached_wp_destination()) {
         gcs().send_text(MAV_SEVERITY_INFO, "Rescue: Target approach reached, waiting for centering");
@@ -565,9 +854,14 @@ void ModeRescue::target_approach_run()
         _hold_point_neu.zero();
         _target_vel_neu.zero();
         _accel_cmd.zero();
-        last_tar_up = AP_HAL::millis();
+        last_tar_up = now;
         _phase = RescuePhase::CENTERING;
     }
+    if(now - last_update_ms > 33){
+        set_destination(_target_gps_loc, true, 0.0f, false, 0.0f,true);
+        last_update_ms = now;
+    }
+    ModeGuided::run();
 }
 
 // ---------------------------------------------------------------------------
@@ -668,23 +962,39 @@ void ModeRescue::deploying_run()
 
 void ModeRescue::switch_to_dynamic_landing()
 {
-    if (!copter.set_mode(Mode::Number::DYNAMIC_LANDING, ModeReason::MISSION_END)) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: failed to switch mode, entering GUIDED");
-        gimbal_point_down = true;
-        _phase = RescuePhase::GUIDED;
-        velaccel_control_start();
-    }
-}
+    // auto_yaw.set_mode_to_default(true);y
+    const Mode::Number target_mode =
+        g2.rescue.beacon_avl ?
+        Mode::Number::DYNAMIC_LANDING :
+        Mode::Number::RTL;
 
+    if (copter.set_mode(target_mode, ModeReason::MISSION_END)) {
+        return;
+    }
+
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "Rescue: failed to switch mode, entering GUIDED");
+
+    gimbal_point_down = true;
+    _phase = RescuePhase::GUIDED;
+    velaccel_control_start();
+}
 void ModeRescue::fire_lifebuoy_servos(bool deploy)
 {
-    const uint16_t pwm = deploy ?
-        g2.rescue.life_deploy_pwm.get() :
-        g2.rescue.life_retract_pwm.get();
+    const uint8_t chans[3] = {
+        (uint8_t)g2.rescue.life_pwm_ch1.get(),
+        (uint8_t)g2.rescue.life_pwm_ch2.get(),
+        (uint8_t)g2.rescue.life_pwm_ch3.get(),
+    };
 
-    AP::servorelayevents()->do_set_servo(g2.rescue.life_pwm_ch1.get(), pwm);
-    AP::servorelayevents()->do_set_servo(g2.rescue.life_pwm_ch2.get(), pwm);
-    AP::servorelayevents()->do_set_servo(g2.rescue.life_pwm_ch3.get(), pwm);
+    for (uint8_t i = 0; i < 3; i++) {
+        SRV_Channel *chan = SRV_Channels::srv_channel(chans[i] - 1);   // channel numbers are 1-indexed on the GCS side
+        if (chan == nullptr) {
+            continue;
+        }
+        const uint16_t pwm = deploy ? chan->get_output_max() : chan->get_output_min();
+        AP::servorelayevents()->do_set_servo(chans[i], pwm);
+    }
 }
 void ModeRescue::advance_to_next_wp()
 {
@@ -692,7 +1002,7 @@ void ModeRescue::advance_to_next_wp()
         _current_idx++;
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
-        if (!wp_nav_set_destination_insert(dest)) {
+        if (!wp_nav_set_destination_insert(dest, _waypoint_yaw[_current_idx])) {
             set_destination(copter.current_loc);
             return;
         }
@@ -736,30 +1046,8 @@ void ModeRescue::handle_rescue_wp(uint16_t seq, uint16_t total_count, int32_t la
     }
 }
 
-void ModeRescue::handle_generate_wps(uint16_t length_m)
-{
-    if (copter.flightmode != this) return;
-    if (_phase != RescuePhase::IDLE && _phase != RescuePhase::WPS_GENERATED) return;
-    if (copter.current_loc.lat == 0 && copter.current_loc.lng == 0) {
-        gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: no GPS fix");
-        return;
-    }
-    _wp_count = _expected_count = 0;
-    _wps_from_generate = true;
-    if (!generate_lawn_pattern((float)length_m)) {
-        _phase = RescuePhase::IDLE;
-        _wps_from_generate = false;
-        return;
-    }
-    echo_wps_to_gcs();
-    _phase = RescuePhase::WPS_GENERATED;
-    _last_status_ms = 0;
-    send_status();
-}
-
 void ModeRescue::handle_lifebuoy(bool deploy)
 {
-    // if (_lifebuoy_deployed) return;
     fire_lifebuoy_servos(deploy);
     if (deploy){
         _lifebuoy_deployed = true;
@@ -815,7 +1103,7 @@ void ModeRescue::handle_start_search()
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: no WPs loaded");
         return;
     }
-    if (!_beacon_valid || (AP_HAL::millis() - _beacon_last_ms > BEACON_TIMEOUT_MS)) {
+    if (g2.rescue.beacon_avl && (!_beacon_valid || (AP_HAL::millis() - _beacon_last_ms > BEACON_TIMEOUT_MS))) {
         gcs().send_text(MAV_SEVERITY_WARNING, "Rescue: no beacon GPS, cannot start");
         return;
     }
@@ -840,7 +1128,7 @@ void ModeRescue::handle_start_search()
         _phase = RescuePhase::WP_NAV;
         Location dest = _waypoints[_current_idx];
         apply_nav_alt(dest);
-        wp_nav_set_destination(dest);
+        wp_nav_set_destination(dest, _waypoint_yaw[_current_idx]);
     }
 }
 
@@ -850,14 +1138,6 @@ void ModeRescue::handle_user_wp_reached(uint16_t wp_index, uint8_t reached)
     for (uint8_t c = 0; c < gcs().num_gcs(); c++) {
         mavlink_msg_user_wp_reached_send(gcs().chan(c)->get_chan(), wp_index, reached);
     }
-}
-
-void ModeRescue::handle_home_beacon_gps(int32_t lat, int32_t lon, float heading, float v_north, float v_east)
-{
-    _beacon_lat     = lat * 1e-7f;
-    _beacon_lon     = lon * 1e-7f;
-    _beacon_last_ms = AP_HAL::millis();
-    _beacon_valid   = true;
 }
 
 void ModeRescue::send_status()
